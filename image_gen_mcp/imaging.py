@@ -1,4 +1,4 @@
-"""Image post-processing, ported from DreamGen-Studio tools/image-gen/common.py.
+"""Image post-processing, ported from the shared helpers of the author's private image scripts.
 
 Every provider's result goes through to_webp(), so every provider gives the same thing:
 WebP bytes, optionally scaled to a width (no crop) or cropped and resized to an exact

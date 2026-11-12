@@ -1,5 +1,5 @@
-"""Provider calls, ported from DreamGen-Studio tools/image-gen/{requesty,openrouter,llmgateway,
-openrouter-video}.py. The request shapes, endpoints and quirks are the same as in those
+"""Provider calls, ported from the author's private image-generation scripts (Requesty,
+OpenRouter, LLM Gateway, OpenRouter video). The request shapes, endpoints and quirks are the same as in those
 scripts; what changed is only that every function takes the caller's key as an argument
 (this server stores no keys) and raises ProviderError instead of exiting.
 
