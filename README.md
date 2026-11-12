@@ -113,9 +113,9 @@ Because the server returns image URLs, a cloud session can save results into its
 
 ### Clients that can't send custom headers
 
-The claude.ai and Claude Desktop "custom connector" dialogs accept only a URL (with OAuth), not
-headers. To use the server there, you would have to run your own instance with server-side keys,
-which this server deliberately does not offer.
+The claude.ai and Claude Desktop chat "custom connector" dialogs take only a URL, not headers, so
+those chats are not supported. Use Claude Code: terminal, the desktop app's Code tab or cloud
+sessions.
 
 ## Run your own instance
 
