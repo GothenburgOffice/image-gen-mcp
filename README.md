@@ -113,9 +113,15 @@ Because the server returns image URLs, a cloud session can save results into its
 
 ### Clients that can't send custom headers
 
-The claude.ai and Claude Desktop chat "custom connector" dialogs take only a URL, not headers, so
-those chats are not supported. Use Claude Code: terminal, the desktop app's Code tab or cloud
-sessions.
+| Where | Works? |
+|---|---|
+| Claude Desktop app, **Code** tab | Yes: it runs Claude Code and reads the same MCP config (`~/.claude.json`, `.mcp.json`) |
+| `claude` in a terminal, IDE extensions | Yes |
+| Claude Code on the web (cloud sessions) | Yes, with the setup above |
+| Claude Desktop app, **Chat** tab, and claude.ai chat | No: their "custom connector" dialog takes only a URL, so the key headers can't be sent |
+
+In the Code tab the `${OPENROUTER_API_KEY}` placeholders are filled in from the desktop app's
+environment. Set the keys as user environment variables, then restart the app so it sees them.
 
 ## Run your own instance
 
