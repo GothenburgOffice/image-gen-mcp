@@ -151,6 +151,11 @@ DATA_DIR=.localdata PORT=8765 .venv/bin/python -m image_gen_mcp
 .venv/bin/python scripts/smoke.py http://127.0.0.1:8765/mcp --generate   # one cheap image (~$0.002–0.02)
 ```
 
-The provider code is ported from the image-generation scripts in DreamGen Studio
-(`tools/image-gen/`). The endpoints, request shapes and provider quirks are the same; they are
-documented at the top of `image_gen_mcp/providers.py`.
+## Origin and license
+
+The provider code is ported from image-generation scripts in the author's private repository,
+where it was written and tested against the live provider APIs. The endpoints, request shapes
+and provider quirks are unchanged; they are documented at the top of
+`image_gen_mcp/providers.py`.
+
+MIT License, © 2026 Gothenburg Office: see [LICENSE](LICENSE).
