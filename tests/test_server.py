@@ -216,3 +216,9 @@ def test_clients_cannot_forge_the_path_marker():
     res = run('key_status', {}, {'X-API-Key': 'k', 'X-Imagegen-Path-Provider': 'requesty'})
     out = json.loads(res.content[0].text)
     assert out['requesty'] == 'no key sent'
+
+
+def test_upload_on_a_provider_path_with_x_api_key():
+    req = urllib.request.Request(f'http://127.0.0.1:{app_port}/openrouter/upload', data=png(), method='POST',
+                                 headers={'X-API-Key': 'or-good'})
+    assert json.loads(urllib.request.urlopen(req).read())['url'].startswith(f'http://127.0.0.1:{app_port}/files/')
