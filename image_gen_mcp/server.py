@@ -184,8 +184,8 @@ portrait targets) and the uncropped original is returned too as full_url.
 
 refs: reference images for identity/style (image-to-image). Each is an https URL, this server's
 /files/ URL (an earlier result or an upload), a data: URL or bare base64. A local file must be uploaded
-first: curl -fsS -X POST --data-binary @ref.webp -H "X-OpenRouter-Key: $OPENROUTER_API_KEY"
-https://<this server>/upload  -> {{"url": ...}}. How many refs a model takes depends on the model.
+first: curl -fsS -X POST --data-binary @ref.webp -H "X-API-Key: <key>"
+https://<this server>/<provider>/upload  -> {{"url": ...}} (the same key and provider as this connection). How many refs a model takes depends on the model.
 
 Moderation differs per model, not per prompt: write a real person's or a named character's identity
 neutrally first ("this man in the reference"); if a model still refuses, switch model rather than
