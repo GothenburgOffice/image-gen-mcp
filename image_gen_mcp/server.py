@@ -38,8 +38,9 @@ TTL_TEXT = f'{store.FILE_TTL_HOURS:g} hours'
 limiter = store.RateLimiter(int(os.environ.get('RATE_PER_MINUTE', '20')), int(os.environ.get('RATE_PER_DAY', '500')))
 
 INSTRUCTIONS = f"""Image and video generation through OpenRouter, LLM Gateway and Requesty, billed to the
-caller's own provider keys (sent as headers X-OpenRouter-Key, X-LLMGateway-Key, X-Requesty-Key;
-the server stores none). Use generate_image for images, list_models for models and prices,
+caller's own provider keys (headers X-OpenRouter-Key, X-LLMGateway-Key, X-Requesty-Key, or X-API-Key
+for the provider in the URL path; the server stores none). With no provider given, tools use the
+connection's provider (/llmgateway/mcp, /requesty/mcp), else openrouter. Use generate_image for images, list_models for models and prices,
 key_status for what is left on the keys, generate_video / video_status for short clips.
 
 Rules:
@@ -73,13 +74,39 @@ def _headers(ctx: Context):
     return ctx.headers or {}
 
 
-def _key(ctx: Context, provider: str) -> str:
-    v = (_headers(ctx).get(KEY_HEADERS[provider]) or '').strip()
+PATH_PROVIDER_HEADER = 'x-imagegen-path-provider'  # set by build_app() from the URL, never by clients
+
+
+def _path_provider(headers) -> str:
+    return headers.get(PATH_PROVIDER_HEADER) or 'openrouter'
+
+
+def _clean(v: str | None) -> str:
+    v = (v or '').strip()
     if v.lower().startswith('bearer '):
         v = v[7:].strip()
-    if not v or v.startswith('${'):
-        raise ToolError(f'No {provider} key in this connection. The client must send the header '
-                        f'"{KEY_HEADERS[provider]}: <key>" (see the server README). The server stores no keys.')
+    return '' if v.startswith('${') else v
+
+
+def _sent_key(headers, provider: str) -> str:
+    """The provider's own header wins; X-API-Key counts for the provider the URL path names
+    (/openrouter/mcp, /llmgateway/mcp, /requesty/mcp; plain /mcp means openrouter)."""
+    v = _clean(headers.get(KEY_HEADERS[provider]))
+    if not v and _path_provider(headers) == provider:
+        v = _clean(headers.get('x-api-key'))
+    return v
+
+
+def _provider(ctx: Context, provider: str | None) -> str:
+    return provider or _path_provider(_headers(ctx))
+
+
+def _key(ctx: Context, provider: str) -> str:
+    v = _sent_key(_headers(ctx), provider)
+    if not v:
+        raise ToolError(f'No {provider} key in this connection. Send "{KEY_HEADERS[provider]}: <key>", or '
+                        f'"X-API-Key: <key>" on the /{provider}/mcp URL (see the server README). '
+                        'The server stores no keys.')
     return v
 
 
@@ -132,7 +159,8 @@ mcp = MCPServer(
 @mcp.tool(
     description=f"""Generate one or more images and return them as an inline preview plus an HTTPS URL to the
 full WebP (valid {TTL_TEXT}; download it with curl to keep it). Billed to the caller's key for the chosen
-provider (header X-OpenRouter-Key / X-LLMGateway-Key / X-Requesty-Key). The reply gives the real cost.
+provider (header X-OpenRouter-Key / X-LLMGateway-Key / X-Requesty-Key, or X-API-Key for the connection's
+provider). The reply gives the real cost.
 
 Use the cheapest suitable model at its lowest quality unless the user asks for something specific. With
 no model, the provider's default is used (openrouter: bytedance-seed/seedream-5-0-flash, $0.018).
@@ -166,7 +194,7 @@ inline: 'preview' (default, longest side 768 px), 'full' or 'none'.""",
 async def generate_image(
     prompt: Annotated[str, Field(description='What to draw.', min_length=1, max_length=32000)],
     ctx: Context,
-    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'], Field(description='Whose API and key to use.')] = 'openrouter',
+    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Whose API and key to use. Empty: the provider in the connection URL (/llmgateway/mcp, /requesty/mcp), else openrouter.')] = None,
     model: Annotated[str | None, Field(description='Model id; empty for the provider default. See list_models.')] = None,
     aspect_ratio: Annotated[str | None, Field(description='e.g. 1:1, 2:3, 16:9 (openrouter, llmgateway Gemini/Seedream).')] = None,
     size: Annotated[str | None, Field(description='WxH, e.g. 1024x1536 (requesty; llmgateway pixel-size models; openrouter only if listed).')] = None,
@@ -188,6 +216,7 @@ async def generate_image(
             imaging.parse_size(fit)
         except imaging.ImageError as e:
             raise ToolError(str(e)) from None
+    provider = _provider(ctx, provider)
     key = _key(ctx, provider)
     model = model or DEFAULT_MODELS[provider]
     if not model:
@@ -260,12 +289,11 @@ filter narrows by id substring.
 )
 async def list_models(
     ctx: Context,
-    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'], Field(description='Which provider.')] = 'openrouter',
+    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Which provider. Empty: the provider in the connection URL, else openrouter.')] = None,
     filter: Annotated[str | None, Field(description='Only ids containing this text.')] = None,
     kind: Annotated[Literal['image', 'video'], Field(description='video lists OpenRouter video models (per-second prices).')] = 'image',
 ) -> list:
-    if kind == 'video':
-        provider = 'openrouter'
+    provider = 'openrouter' if kind == 'video' else _provider(ctx, provider)
     key = _key(ctx, provider)
 
     def call():
@@ -300,9 +328,9 @@ is reached unless the user asks. Keys are never returned.""",
 )
 async def key_status(ctx: Context) -> list:
     out = {}
-    for provider, header in KEY_HEADERS.items():
-        v = (_headers(ctx).get(header) or '').strip()
-        if not v or v.startswith('${'):
+    for provider in KEY_HEADERS:
+        v = _sent_key(_headers(ctx), provider)
+        if not v:
             out[provider] = 'no key sent'
             continue
         if provider == 'openrouter':
@@ -467,8 +495,8 @@ async def upload(request: Request) -> Response:
     msg = limiter.check(_client_id(request))
     if msg:
         return JSONResponse({'error': msg}, status_code=429)
-    sent = {p: (request.headers.get(h) or '').strip() for p, h in KEY_HEADERS.items()}
-    sent = {p: v[7:] if v.lower().startswith('bearer ') else v for p, v in sent.items() if v and not v.startswith('${')}
+    sent = {p: _sent_key(request.headers, p) for p in KEY_HEADERS}
+    sent = {p: v for p, v in sent.items() if v}
     if not sent:
         return JSONResponse({'error': 'send a provider key header (X-OpenRouter-Key, X-LLMGateway-Key or X-Requesty-Key)'},
                             status_code=401)
@@ -530,8 +558,17 @@ def build_app():
     inner = app
 
     async def guarded(scope, receive, send):
+        # /<provider>/mcp and /<provider>/upload are /mcp and /upload with X-API-Key meaning that
+        # provider's key. The marker header is always stripped from what the client sent.
+        if scope['type'] == 'http':
+            headers = [(k, v) for k, v in scope['headers'] if k.decode().lower() != PATH_PROVIDER_HEADER]
+            parts = scope['path'].split('/', 2)
+            if len(parts) == 3 and parts[1] in KEY_HEADERS and parts[2].split('/')[0] in ('mcp', 'upload'):
+                headers.append((PATH_PROVIDER_HEADER.encode(), parts[1].encode()))
+                scope = {**scope, 'path': '/' + parts[2], 'raw_path': ('/' + parts[2]).encode()}
+            scope = {**scope, 'headers': headers}
         # Optional shared token for the MCP endpoint (SERVER_TOKEN); /health and /files stay open.
-        if scope['type'] == 'http' and SERVER_TOKEN and scope['path'].startswith('/mcp'):
+        if scope['type'] == 'http' and SERVER_TOKEN and scope['path'].startswith(('/mcp', '/upload')):
             headers = {k.decode().lower(): v.decode() for k, v in scope['headers']}
             if not _check_token(headers):
                 await JSONResponse({'error': 'unauthorized'}, status_code=401)(scope, receive, send)

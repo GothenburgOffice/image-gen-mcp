@@ -187,3 +187,32 @@ def test_file_names_are_validated():
         raise AssertionError('traversal served')
     except urllib.error.HTTPError as e:
         assert e.code == 404
+
+
+async def call_at(path, tool, args, headers):
+    url = f'http://127.0.0.1:{app_port}{path}'
+    async with create_mcp_http_client(headers=headers) as http, \
+            streamable_http_client(url, http_client=http) as (r, w), ClientSession(r, w) as s:
+        await s.initialize()
+        return await s.call_tool(tool, args)
+
+
+def test_x_api_key_on_plain_mcp_is_openrouter():
+    res = run('key_status', {}, {'X-API-Key': 'or-good'})
+    out = json.loads(res.content[0].text)
+    assert '12.50 of $20.00' in out['openrouter']['summary'] and out['llmgateway'] == 'no key sent'
+
+
+def test_x_api_key_follows_the_path_provider():
+    res = asyncio.run(call_at('/llmgateway/mcp', 'key_status', {}, {'X-API-Key': 'lg-key'}))
+    out = json.loads(res.content[0].text)
+    assert out['openrouter'] == 'no key sent' and out['llmgateway'].startswith('key sent')
+    # with no provider argument, tools use the connection's provider
+    res = asyncio.run(call_at('/llmgateway/mcp', 'generate_image', {'prompt': 'x', 'model': 'm'}, {'X-API-Key': 'lg-key'}))
+    assert res.is_error and 'content filter' in res.content[0].text
+
+
+def test_clients_cannot_forge_the_path_marker():
+    res = run('key_status', {}, {'X-API-Key': 'k', 'X-Imagegen-Path-Provider': 'requesty'})
+    out = json.loads(res.content[0].text)
+    assert out['requesty'] == 'no key sent'

@@ -17,6 +17,7 @@ each call is billed to that key:
 | `X-OpenRouter-Key` | OpenRouter: images, video and spending status |
 | `X-LLMGateway-Key` | LLM Gateway: images |
 | `X-Requesty-Key` | Requesty: images |
+| `X-API-Key` | The provider named in the URL: `/mcp` or `/openrouter/mcp` → OpenRouter, `/llmgateway/mcp` → LLM Gateway, `/requesty/mcp` → Requesty. For clients that can only send a standard header name |
 
 Send only the keys you want to use. The server forwards a key to its own provider and does
 nothing else with it: keys are not logged, not written to disk and never returned. The server is
@@ -111,17 +112,31 @@ key".
 Because the server returns image URLs, a cloud session can save results into its repository with
 `curl`.
 
-### Clients that can't send custom headers
+### Where it works
 
 | Where | Works? |
 |---|---|
 | Claude Desktop app, **Code** tab | Yes: it runs Claude Code and reads the same MCP config (`~/.claude.json`, `.mcp.json`) |
 | `claude` in a terminal, IDE extensions | Yes |
 | Claude Code on the web (cloud sessions) | Yes, with the setup above |
-| Claude Desktop app, **Chat** tab, and claude.ai chat | No: their "custom connector" dialog takes only a URL, so the key headers can't be sent |
+| Claude Desktop app, **Chat** tab, and claude.ai chat | Yes, one provider per connector (see below) |
 
 In the Code tab the `${OPENROUTER_API_KEY}` placeholders are filled in from the desktop app's
 environment. Set the keys as user environment variables, then restart the app so it sees them.
+
+### Claude Desktop Chat tab and claude.ai (custom connector)
+
+Custom header names such as `X-OpenRouter-Key` need Anthropic's approval in the connector
+dialog, so use the standard `X-API-Key` header there. The URL decides which provider the key is
+for. In **Settings → Connectors → Add custom connector**:
+
+1. URL: `https://imagemcp.gothenburgoffice.se/openrouter/mcp`. Use `/llmgateway/mcp` or
+   `/requesty/mcp` for those providers.
+2. Authentication: **No sign-in**.
+3. Request headers: `X-API-Key` with the provider's real API key as the value. Claude stores it
+   encrypted and sends it on every request; this server doesn't store it.
+
+Each connector carries one key. For more than one provider, add one connector per provider.
 
 ## Run your own instance
 
