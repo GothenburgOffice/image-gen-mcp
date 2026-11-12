@@ -29,7 +29,7 @@ KEY_HEADERS = {'openrouter': 'x-openrouter-key', 'llmgateway': 'x-llmgateway-key
 DEFAULT_MODELS = {
     'openrouter': os.environ.get('DEFAULT_OPENROUTER_MODEL', 'bytedance-seed/seedream-5-0-flash'),
     'llmgateway': os.environ.get('DEFAULT_LLMGATEWAY_MODEL', 'qwen-image-2.1-turbo'),
-    'requesty': os.environ.get('DEFAULT_REQUESTY_MODEL', ''),
+    'requesty': os.environ.get('DEFAULT_REQUESTY_MODEL', 'vertex/google/gemini-2.5-flash-image'),
 }
 SERVER_TOKEN = os.environ.get('SERVER_TOKEN', '').strip()
 TRUSTED_IP_HEADER = os.environ.get('TRUSTED_IP_HEADER', '').strip().lower()
@@ -67,7 +67,10 @@ PRICE_GUIDE = """Known models and prices (real runs, 2026-11; recheck with list_
 - openrouter x-ai/grok-imagine-image-2.0: $0.06, max 3 refs; when likeness matters most.
 - openrouter google/gemini-3.1-flash-image ~$0.068; google/gemini-2.5-flash-image ~$0.039 (older Gemini
   image models accept named fiction identities more readily).
-- llmgateway seedream-5-0-flash adds a small "AI generated" mark: take Seedream from OpenRouter."""
+- llmgateway seedream-5-0-flash adds a small "AI generated" mark: take Seedream from OpenRouter.
+- requesty vertex/google/gemini-2.5-flash-image: worked (default there; cost about $0.04, not reported in
+  the reply). On Requesty use the routed ids with a provider prefix (vertex/google/...): the bare
+  google/gemini-2.5-flash-image is in its model list but answered 404 "model not found" (2026-11-12)."""
 
 
 def _headers(ctx: Context):
@@ -172,7 +175,8 @@ Shape, per provider:
 - llmgateway: size WxH (GPT Image, Qwen, Wan, Seedream, Z.AI; GPT Image sides divisible by 16) or
   aspect_ratio (Gemini, Seedream; GPT Image refuses it); resolution tier 0.5K/1K/2K (Gemini, Wan).
   Give size or resolution, not both. quality only when given.
-- requesty: size WxH (default 1024x1024) and quality (default low); model is required (list_models).
+- requesty: size WxH (default 1024x1024) and quality (default low). Default model
+  vertex/google/gemini-2.5-flash-image; Requesty replies carry no cost, so check its dashboard.
 
 Post-processing (all providers): width scales to that width keeping the shape; fit WxH crops and
 resizes to exactly that size (anchor auto/top/center/bottom picks what the crop keeps; auto = top for
@@ -282,7 +286,8 @@ def _b64(data: bytes) -> str:
 the costs actually seen in real runs on this server. Use it to pick the cheapest suitable model.
 openrouter: every image model with its lowest output price and max reference images (first call can
 take ~20 s, then cached 6 h). llmgateway: estimated price per image at the lowest tier and whether it
-takes references. requesty: image models with their pricing. Needs that provider's key header.
+takes references. requesty: image models with their pricing (prefer the vendor-prefixed ids, e.g.
+vertex/google/...; some bare ids in the list return 404). Needs that provider's key header.
 filter narrows by id substring.
 {PRICE_GUIDE}""",
     structured_output=False,
