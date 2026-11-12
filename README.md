@@ -61,82 +61,51 @@ provider accepts, so the server can't be used as free file hosting.
 
 ## Connect a client
 
-### Claude Code: local terminal or desktop
+### Recommended: custom connectors (every Claude surface)
+
+Connectors live in your Claude account, so one setup reaches the Desktop app's **Chat** and
+**Code** tabs, claude.ai and Claude Code cloud sessions. Tested with all three providers from a
+cloud session (2026-11-12).
+
+Custom header names such as `X-OpenRouter-Key` need Anthropic's approval in the connector
+dialog, so connectors use the standard `X-API-Key` header and the URL says which provider the key
+is for. Add one connector per provider in **Settings → Connectors → Add custom connector**:
+
+1. URL: `https://imagemcp.gothenburgoffice.se/openrouter/mcp`, `/llmgateway/mcp` or `/requesty/mcp`.
+2. Authentication: **No sign-in**.
+3. Request headers: `X-API-Key` with that provider's real API key as the value. Claude stores it
+   encrypted and sends it on every request; this server doesn't store it.
+
+### Claude Code config, for the terminal (`claude`) only
 
 Keep the keys in environment variables (`OPENROUTER_API_KEY`, `LLMGATEWAY_API_KEY`,
-`REQUESTY_API_KEY`). Then add the server once, for all your projects:
+`REQUESTY_API_KEY`) and add the server once:
 
 ```bash
 claude mcp add --transport http --scope user image-gen https://imagemcp.gothenburgoffice.se/mcp --header 'X-OpenRouter-Key: ${OPENROUTER_API_KEY}' --header 'X-LLMGateway-Key: ${LLMGATEWAY_API_KEY}' --header 'X-Requesty-Key: ${REQUESTY_API_KEY}'
 ```
 
-Keep the single quotes, so the `${...}` placeholders are stored as written and Claude Code
-fills them in from your environment when it connects. With double quotes (or in PowerShell
-`$env:...`) the keys themselves are written into `~/.claude.json`. That also works, but you
-then have to re-add the server when a key changes.
+The single quotes store the `${...}` placeholders, and the `claude` CLI fills them in from your
+environment. **The Desktop app's Code tab did not fill them in** (2026-11-12): the server got the
+placeholder text, and `key_status` said "no key sent". So in the Desktop app, use the connectors
+above. If you use both, remove this entry (`claude mcp remove image-gen --scope user`), so
+sessions don't show a second, keyless copy of the tools.
 
-Check the connection with `claude mcp list` and ask Claude to "check image-gen key status".
+A committed `.mcp.json` with the same headers (`"X-OpenRouter-Key": "${OPENROUTER_API_KEY:-}"`)
+works the same way, with the same Desktop caveat. Prefer connectors.
 
-### Per project (`.mcp.json`): also works in cloud sessions
+### Cloud sessions (Claude Code on the web)
 
-Commit this file to a repository, and every session in it, local or cloud, gets the server:
+The connectors above are available there. The environment's network access must reach
+`imagemcp.gothenburgoffice.se`: either a custom allowlist or full access. Because the server
+returns image URLs, a cloud session can save results into its repository with `curl`.
 
-```json
-{
-  "mcpServers": {
-    "image-gen": {
-      "type": "http",
-      "url": "https://imagemcp.gothenburgoffice.se/mcp",
-      "headers": {
-        "X-OpenRouter-Key": "${OPENROUTER_API_KEY:-}",
-        "X-LLMGateway-Key": "${LLMGATEWAY_API_KEY:-}",
-        "X-Requesty-Key": "${REQUESTY_API_KEY:-}"
-      }
-    }
-  }
-}
-```
-
-`:-` gives an empty value when a variable is not set. The server treats an empty value as "no
-key".
-
-### Claude Code on the web (cloud sessions)
-
-1. Commit the `.mcp.json` above to the repository the session runs in.
-2. In the cloud environment's settings, add `OPENROUTER_API_KEY` (and the others you use) as
-   environment variables.
-3. Set the environment's network access so it can reach `imagemcp.gothenburgoffice.se`: either
-   add the host to a custom allowlist or use full access. The default trusted list does not
-   include it.
-
-Because the server returns image URLs, a cloud session can save results into its repository with
-`curl`.
-
-### Where it works
-
-| Where | Works? |
+| Where | How |
 |---|---|
-| Claude Desktop app, **Code** tab | Yes: it runs Claude Code and reads the same MCP config (`~/.claude.json`, `.mcp.json`) |
-| `claude` in a terminal, IDE extensions | Yes |
-| Claude Code on the web (cloud sessions) | Yes, with the setup above |
-| Claude Desktop app, **Chat** tab, and claude.ai chat | Yes, one provider per connector (see below) |
-
-In the Code tab the `${OPENROUTER_API_KEY}` placeholders are filled in from the desktop app's
-environment. Set the keys as user environment variables, then restart the app so it sees them.
-
-### Claude Desktop Chat tab and claude.ai (custom connector)
-
-Custom header names such as `X-OpenRouter-Key` need Anthropic's approval in the connector
-dialog, so use the standard `X-API-Key` header there. The URL decides which provider the key is
-for. In **Settings → Connectors → Add custom connector**:
-
-1. URL: `https://imagemcp.gothenburgoffice.se/openrouter/mcp`. Use `/llmgateway/mcp` or
-   `/requesty/mcp` for those providers.
-2. Authentication: **No sign-in**.
-3. Request headers: `X-API-Key` with the provider's real API key as the value. Claude stores it
-   encrypted and sends it on every request; this server doesn't store it.
-
-Each connector carries one key. For more than one provider, add one connector per provider.
+| Claude Desktop app, Chat and Code tabs | Connectors |
+| claude.ai chat | Connectors |
+| Claude Code cloud sessions | Connectors, plus network access to the host |
+| `claude` in a terminal | Connectors, or the `claude mcp add` entry above |
 
 ## Run your own instance
 
