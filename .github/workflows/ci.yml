@@ -1,0 +1,60 @@
+name: Verify
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt pytest==9.0.1
+      - run: python -m pytest -q tests
+  publish:
+    name: Build, test and publish the image to GHCR
+    if: github.event_name != 'pull_request'
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build
+        run: docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" --tag image-gen-mcp:candidate .
+      - name: The image starts and answers /health
+        run: |
+          docker run -d --name candidate -p 127.0.0.1:8000:8000 \
+            -e PUBLIC_URL=http://127.0.0.1:8000 -e PUBLIC_HOST=127.0.0.1:8000 --read-only --tmpfs /tmp \
+            -v data:/data image-gen-mcp:candidate
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/health && exit 0; sleep 1; done
+          docker logs candidate; exit 1
+      - name: Sign in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested image
+        if: github.ref == 'refs/heads/main'
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}"
+          for tag in "sha-$GITHUB_SHA" latest; do
+            docker tag image-gen-mcp:candidate "$image:$tag"
+            docker push "$image:$tag"
+          done
+          echo "### Published \`$image:sha-$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"

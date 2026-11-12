@@ -1,0 +1,25 @@
+# Ready-built release: pulls the published image; no source checkout needed.
+name: image-gen-mcp
+services:
+  app:
+    image: ${IMAGE_GEN_MCP_IMAGE:-ghcr.io/gothenburgoffice/image-gen-mcp:latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT:-3430}:8000"
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env}
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST in .env}
+      TRUSTED_IP_HEADER: ${TRUSTED_IP_HEADER:-}
+      SERVER_TOKEN: ${SERVER_TOKEN:-}
+      FILE_TTL_HOURS: ${FILE_TTL_HOURS:-168}
+      RATE_PER_MINUTE: ${RATE_PER_MINUTE:-20}
+      RATE_PER_DAY: ${RATE_PER_DAY:-500}
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  data:
