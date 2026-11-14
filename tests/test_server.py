@@ -334,3 +334,17 @@ def test_llmgateway_speech_list_keeps_voiceless_models_and_drops_realtime():
         providers._json = real
         providers._cache.pop('llmg-speech-models', None)
     assert [r['id'] for r in rows] == ['tts-novoice'] and rows[0]['voices'] == []
+
+
+def test_requesty_speech_list_shows_voices_only_for_openai_models():
+    from image_gen_mcp import providers
+    catalog = {'data': [
+        {'id': 'openai/tts-1', 'api': 'speech', 'pricing': {'input_character': '15e-6'}},
+        {'id': 'deepinfra/Kokoro-82M', 'api': 'speech', 'pricing': {'input_character': '1e-6'}}]}
+    real = providers._json
+    providers._json = lambda *a, **k: catalog
+    try:
+        rows = {r['id']: r for r in providers.speech_models('requesty', 'k')}
+    finally:
+        providers._json = real
+    assert 'alloy' in rows['openai/tts-1']['voices'] and rows['deepinfra/Kokoro-82M']['voices'] == []

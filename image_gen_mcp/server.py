@@ -120,9 +120,10 @@ def _provider(ctx: Context, provider: str | None) -> str:
 def _key(ctx: Context, provider: str) -> str:
     v = _sent_key(_headers(ctx), provider)
     if not v:
-        raise ToolError(f'No {provider} key in this connection. Send "{KEY_HEADERS[provider]}: <key>", or '
-                        f'"X-API-Key: <key>" on the /{provider}/mcp URL (see the server README). '
-                        'The server stores no keys.')
+        raise ToolError(f'No {provider} key in this connection. Send "{KEY_HEADERS[provider]}: <key>" '
+                        f'(on any connection), or use the /{provider}/mcp connection with "X-API-Key: <key>" '
+                        '(see the server README). Each provider needs its own key: a connection that has only '
+                        'another provider\'s key cannot call this one. The server stores no keys.')
     return v
 
 
@@ -303,7 +304,10 @@ est_usd_per_1000_chars (an estimate: per-character models exact, token-priced Ge
 assume ~65 s of audio per 1000 characters). Voices belong to a model, not a provider. To find who offers
 a voice, call it once per provider with voice=<name> (e.g. voice='Aoede'): only models offering that voice
 come back. With many models, each row shows voice_count and a sample; pass filter=<model id> to see all
-of a model's voices. Requesty has only OpenAI speech models (11 fixed voices).
+of a model's voices. Requesty lists OpenAI models (11 fixed voices) and DeepInfra models (Kokoro,
+Chatterbox, Orpheus, ...) whose voices are not listed. Some models, e.g. OpenAI gpt-4o-mini-tts on Requesty,
+have no comparable price (est_usd_per_1000_chars null): they sort last. Each provider needs its own key
+(header or /<provider>/mcp connection); asking for a provider without a key fails.
 openrouter: every image model with its lowest output price and max reference images (first call can
 take ~20 s, then cached 6 h). llmgateway: estimated price per image at the lowest tier and whether it
 takes references. requesty: image models with their pricing (prefer the vendor-prefixed ids, e.g.
@@ -314,7 +318,7 @@ filter narrows by id substring.
 )
 async def list_models(
     ctx: Context,
-    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Which provider. Empty: the provider in the connection URL, else openrouter.')] = None,
+    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Which provider. Empty: the provider in the connection URL, else openrouter. Needs that provider\'s own key: its header, or the /<provider>/mcp connection.')] = None,
     filter: Annotated[str | None, Field(description='Only ids containing this text.')] = None,
     kind: Annotated[Literal['image', 'video', 'speech'], Field(description='video lists OpenRouter video models (per-second prices); speech lists text-to-speech models.')] = 'image',
     voice: Annotated[str | None, Field(description="kind='speech' only: only models offering this voice (case-insensitive), e.g. Aoede, alloy, Sarah.")] = None,
@@ -508,15 +512,17 @@ async def video_status(
 @mcp.tool(
     description=f"""Text to speech: turn text into an audio file (mp3, wav, ...) and return an HTTPS URL to it
 (valid {TTL_TEXT}; download it with curl to keep it). Billed to the caller's key for the chosen provider.
-All three providers have it, through an OpenAI-style /audio/speech endpoint:
+All three providers have it, through an OpenAI-style /audio/speech endpoint, each with its own key
+(its header on any connection, or X-API-Key on its /<provider>/mcp URL):
 - openrouter: default model mistralai/voxtral-mini-tts-2603; returns mp3 (other formats are not offered);
   no cost in the reply, check key_status.
 - llmgateway: default gemini-2.5-flash-preview-tts (voice e.g. Kore, Puck, Zephyr; wav). Also ElevenLabs
   (eleven-multilingual-v2, eleven-flash-v2-5; voice e.g. Sarah, Aria, Roger; mp3) and others. The reply
   gives the real cost.
-- requesty: OpenAI only, default openai/gpt-4o-mini-tts (also openai/tts-1, openai/tts-1-hd); voice
-  alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer or verse (default alloy); text up
-  to 4096 characters; no cost in the reply.
+- requesty: default openai/gpt-4o-mini-tts (also openai/tts-1, openai/tts-1-hd); OpenAI voices alloy,
+  ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer or verse (default alloy for OpenAI models).
+  DeepInfra models (Kokoro, Chatterbox, Orpheus, ...) are listed too; their voices are not listed, so
+  pass none or a voice from that model's own docs. Text up to 4096 characters; no cost in the reply.
 Voices are model-specific. To pick a model: list_models kind='speech' (cheapest first, with voices); for
 a given voice, list_models kind='speech' voice=<name> on each provider and take the cheapest match (e.g.
 voice Aoede: openrouter google/gemini-3.8-flash-lite-tts was cheapest in 2026-11).
@@ -545,7 +551,8 @@ async def generate_speech(
         if len(text) > 4096:
             raise ToolError(f'Requesty speech takes at most 4096 characters, not {len(text)}: split the text '
                             'into several calls, or use another provider')
-        voice = voice or 'alloy'
+        if model.startswith('openai/'):
+            voice = voice or 'alloy'
     _rate(ctx)
     shape = {'size': f'{len(text)} chars', 'quality': voice, 'refs': 0}
 

@@ -477,7 +477,10 @@ def speech_models(provider: str, key: str) -> list[dict]:
         if m.get('api') != 'speech':
             continue
         pr = m.get('pricing') or {}
-        rows.append(_speech_row(m.get('id', ''), OPENAI_VOICES, per_char=_f(pr.get('input_character')),
+        mid = m.get('id', '')
+        # Only OpenAI's models are known to take the 11 OpenAI voice names; for the others
+        # (DeepInfra Kokoro, Chatterbox, ...) the list says nothing, so show none rather than guess.
+        rows.append(_speech_row(mid, OPENAI_VOICES if mid.startswith('openai/') else [], per_char=_f(pr.get('input_character')),
                                 per_in_token=_f(pr.get('input_token')), per_out_token=_f(pr.get('output_token'))))
     return sorted(rows, key=_by_price)
 
