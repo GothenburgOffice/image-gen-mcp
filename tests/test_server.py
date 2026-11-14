@@ -83,6 +83,8 @@ class Stub(BaseHTTPRequestHandler):
                     return self.reply({'error': {'message': 'Gemini TTS only supports response_format="pcm". Got "mp3".'}}, 400)
                 return self.raw(b'\xff\xf3' + b'\x00' * 98, 'audio/pcm')  # pcm that happens to look like mp3
             return self.raw(b'ID3\x04\x00fake-mp3', 'audio/mpeg')
+        if self.path == '/rq/audio/speech':
+            return self.raw(b'ID3\x04\x00fake-mp3', 'audio/mpeg')
         if self.path == '/lg/audio/speech':
             if payload.get('voice') == 'no-sse':
                 if 'stream_format' in payload:
@@ -108,6 +110,7 @@ threading.Thread(target=ThreadingHTTPServer(('127.0.0.1', stub_port), Stub).serv
 os.environ.update({
     'OPENROUTER_BASE_URL': f'http://127.0.0.1:{stub_port}/or',
     'LLMGATEWAY_BASE_URL': f'http://127.0.0.1:{stub_port}/lg',
+    'REQUESTY_BASE_URL': f'http://127.0.0.1:{stub_port}/rq',
     'DATA_DIR': tempfile.mkdtemp(),
     'PUBLIC_URL': f'http://127.0.0.1:{app_port}',
 })
@@ -348,3 +351,16 @@ def test_requesty_speech_list_shows_voices_only_for_openai_models():
     finally:
         providers._json = real
     assert 'alloy' in rows['openai/tts-1']['voices'] and rows['deepinfra/Kokoro-82M']['voices'] == []
+
+
+def test_requesty_speech_default_voice_only_for_openai_models():
+    res = run('generate_speech', {'text': 'hej', 'provider': 'requesty', 'model': 'openai/tts-1'}, {'X-Requesty-Key': 'k'})
+    assert not res.is_error, res.content[0].text
+    assert SEEN['payload']['voice'] == 'alloy'
+    res = run('generate_speech', {'text': 'hej', 'provider': 'requesty', 'model': 'deepinfra/hexgrad/Kokoro-82M'},
+              {'X-Requesty-Key': 'k'})
+    assert not res.is_error, res.content[0].text
+    assert SEEN['payload'].get('voice') is None
+    res = run('generate_speech', {'text': 'hej', 'provider': 'requesty', 'model': 'deepinfra/hexgrad/Kokoro-82M',
+                                  'voice': 'af_bella'}, {'X-Requesty-Key': 'k'})
+    assert SEEN['payload']['voice'] == 'af_bella'

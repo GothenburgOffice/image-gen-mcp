@@ -537,7 +537,7 @@ inline: 'none' (default) or 'full' (also return the audio inline, for clients th
 async def generate_speech(
     text: Annotated[str, Field(description='What to say.', min_length=1, max_length=20000)],
     ctx: Context,
-    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Whose API and key to use. Empty: the provider in the connection URL, else openrouter.')] = None,
+    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Whose API and key to use. Empty: the provider in the connection URL, else openrouter. Needs that provider's own key: its header, or the /<provider>/mcp connection.')] = None,
     model: Annotated[str | None, Field(description='Speech model id; empty for the provider default. See list_models kind=speech.')] = None,
     voice: Annotated[str | None, Field(description='Voice name or id for the model (e.g. alloy, Kore, Sarah).')] = None,
     response_format: Annotated[Literal['mp3', 'wav', 'opus', 'aac', 'flac'] | None, Field(description='Audio format where the model offers it; empty for its default.')] = None,
