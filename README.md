@@ -60,8 +60,11 @@ can pass `inline: "full"` or `"none"` instead. The full WebP is at
 `curl -fsSL -o out.webp <url>`.
 
 **Speech.** `generate_speech` defaults to `mistralai/voxtral-mini-tts-2603` on OpenRouter (MP3
-only), `gemini-2.5-flash-preview-tts` on LLM Gateway (WAV; ElevenLabs models too) and
-`openai/gpt-4o-mini-tts` on Requesty (OpenAI voices only). Only LLM Gateway reports the cost of a
+only; it needs an explicit `voice`, e.g. `en_paul_neutral`), `gemini-2.5-flash-preview-tts` on LLM Gateway (WAV; ElevenLabs models too) and
+`openai/gpt-4o-mini-tts` on Requesty (which also lists DeepInfra models such as Kokoro and Chatterbox;
+only the OpenAI models show voices). Each provider needs its own key, so `list_models` or
+`generate_speech` for a provider you sent no key for fails: add its header or use its `/<provider>/mcp`
+connection. Only LLM Gateway reports the cost of a
 speech call; for the others, `list_models kind=speech` shows the prices. That listing is ranked by an
 estimated price per 1,000 characters and shows each model's voices; `voice=Aoede` (for example)
 keeps only the models that offer that voice. Voices belong to models, so ask each provider. Override the defaults with
