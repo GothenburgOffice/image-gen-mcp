@@ -50,6 +50,15 @@ class Stub(BaseHTTPRequestHandler):
             self.reply({'data': [{'id': 'test/cheap', 'endpoints': '/api/v1/images/models/test/cheap/endpoints',
                                   'supported_parameters': {'aspect_ratio': {'type': 'enum', 'values': ['1:1', '2:3']},
                                                            'input_references': {'type': 'range', 'min': 0, 'max': 2}}}]})
+        elif self.path == '/or/models?output_modalities=speech':
+            self.reply({'data': [
+                {'id': 'google/tts-lite', 'pricing': {'prompt': '0.0000005', 'completion': '0.000006'},
+                 'supported_voices': ['Aoede', 'Kore']},
+                {'id': 'cheap/chars', 'pricing': {'prompt': '0.0000006', 'completion': '0'},
+                 'supported_voices': ['af_bella']},
+                {'id': 'google/tts-pro', 'pricing': {'prompt': '0.000001', 'completion': '0.00002'},
+                 'supported_voices': ['Aoede']},
+                {'id': 'odd/unit', 'pricing': {'prompt': '0', 'completion': '0.0025'}, 'supported_voices': []}]})
         elif self.path == '/or/key':
             if self.headers.get('Authorization') != 'Bearer or-good':
                 return self.reply({'error': 'bad key'}, 401)
@@ -278,3 +287,16 @@ def test_speech_llmgateway_falls_back_to_binary_when_sse_is_refused():
 def test_speech_requesty_length_limit():
     res = run('generate_speech', {'text': 'a' * 4097, 'provider': 'requesty'}, {'X-Requesty-Key': 'k'})
     assert res.is_error and '4096' in res.content[0].text
+
+
+def test_speech_models_ranked_with_voice_filter():
+    res = run('list_models', {'kind': 'speech', 'voice': 'aoede'}, {'X-OpenRouter-Key': 'or-good'})
+    assert not res.is_error, res.content[0].text
+    rows = json.loads(res.content[0].text)['models']
+    assert [r['id'] for r in rows] == ['google/tts-lite', 'google/tts-pro']
+    assert rows[0]['est_usd_per_1000_chars'] < rows[1]['est_usd_per_1000_chars']
+    assert 'Aoede' in rows[0]['voices'] and '/ $6.00 per million' in rows[0]['price']
+    res = run('list_models', {'kind': 'speech'}, {'X-OpenRouter-Key': 'or-good'})
+    rows = json.loads(res.content[0].text)['models']
+    assert rows[0]['id'] == 'cheap/chars' and rows[-1]['id'] == 'odd/unit'
+    assert rows[-1]['est_usd_per_1000_chars'] is None

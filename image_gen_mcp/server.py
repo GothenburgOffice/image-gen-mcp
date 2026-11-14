@@ -47,7 +47,8 @@ caller's own provider keys (headers X-OpenRouter-Key, X-LLMGateway-Key, X-Reques
 for the provider in the URL path; the server stores none). With no provider given, tools use the
 connection's provider (/llmgateway/mcp, /requesty/mcp), else openrouter. Use generate_image for images, list_models for models and prices,
 key_status for what is left on the keys, generate_video / video_status for short clips,
-generate_speech for text to speech (all three providers).
+generate_speech for text to speech (all three providers; find models and voices with
+list_models kind='speech', voice=<name>, once per provider).
 
 Rules:
 - Cheapest suitable model at its lowest quality is the standard; spend more only when the user
@@ -77,6 +78,12 @@ PRICE_GUIDE = """Known models and prices (real runs, 2026-11; recheck with list_
 - requesty vertex/google/gemini-2.5-flash-image: worked (default there; cost about $0.04, not reported in
   the reply). On Requesty use the routed ids with a provider prefix (vertex/google/...): the bare
   google/gemini-2.5-flash-image is in its model list but answered 404 "model not found" (2026-11-12)."""
+
+
+SPEECH_LIST_NOTE = ('Voices are per model. Rows show a sample of voices when many models are listed: pass '
+                    'filter=<model id> for all of them, or voice=<name> to find the models offering it. '
+                    'est_usd_per_1000_chars ranks models; the cost in each generate_speech reply is what was billed '
+                    '(only llmgateway reports it).')
 
 
 def _headers(ctx: Context):
@@ -290,8 +297,13 @@ def _b64(data: bytes) -> str:
 @mcp.tool(
     description=f"""List image models (video models with kind='video', text-to-speech models with
 kind='speech') with prices, for one provider, plus the costs actually seen in real runs on this server.
-Use it to pick the cheapest suitable model. kind='speech' works for all three providers (llmgateway
-also lists each model's voices).
+Use it to pick the cheapest suitable model.
+kind='speech': text-to-speech models of one provider with their voices, cheapest first by
+est_usd_per_1000_chars (an estimate: per-character models exact, token-priced Gemini/OpenAI models
+assume ~65 s of audio per 1000 characters). Voices belong to a model, not a provider. To find who offers
+a voice, call it once per provider with voice=<name> (e.g. voice='Aoede'): only models offering that voice
+come back. With many models, each row shows voice_count and a sample; pass filter=<model id> to see all
+of a model's voices. Requesty has only OpenAI speech models (11 fixed voices).
 openrouter: every image model with its lowest output price and max reference images (first call can
 take ~20 s, then cached 6 h). llmgateway: estimated price per image at the lowest tier and whether it
 takes references. requesty: image models with their pricing (prefer the vendor-prefixed ids, e.g.
@@ -305,6 +317,7 @@ async def list_models(
     provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Which provider. Empty: the provider in the connection URL, else openrouter.')] = None,
     filter: Annotated[str | None, Field(description='Only ids containing this text.')] = None,
     kind: Annotated[Literal['image', 'video', 'speech'], Field(description='video lists OpenRouter video models (per-second prices); speech lists text-to-speech models.')] = 'image',
+    voice: Annotated[str | None, Field(description="kind='speech' only: only models offering this voice (case-insensitive), e.g. Aoede, alloy, Sarah.")] = None,
 ) -> list:
     provider = 'openrouter' if kind == 'video' else _provider(ctx, provider)
     key = _key(ctx, provider)
@@ -326,12 +339,18 @@ async def list_models(
         raise ToolError(str(e)) from None
     if filter:
         rows = [r for r in rows if filter.lower() in r['id'].lower()]
+    if kind == 'speech':
+        if voice:
+            rows = [r for r in rows if voice.lower() in (v.lower() for v in r['voices'])]
+        elif len(rows) > 5:  # the full voice lists of every model are long: a sample, unless narrowed
+            rows = [{**r, 'voice_count': len(r['voices']), 'voices': r['voices'][:8]} for r in rows]
     prefix = f'{provider}/' if kind == 'image' else f'{provider}-{kind}/'
     seen = {k[len(prefix):]: v for k, v in store.read_costs().items() if k.startswith(prefix)}
     default = {'image': DEFAULT_MODELS, 'speech': DEFAULT_SPEECH_MODELS}.get(kind, {}).get(provider)
     return [_text({'provider': provider, 'kind': kind, 'default_model': default,
                    'models': rows, 'observed_costs': seen,
-                   'note': 'Reference images can add a per-image input charge; the cost in each reply is what was billed.'})]
+                   'note': SPEECH_LIST_NOTE if kind == 'speech' else
+                   'Reference images can add a per-image input charge; the cost in each reply is what was billed.'})]
 
 
 @mcp.tool(
@@ -498,7 +517,9 @@ All three providers have it, through an OpenAI-style /audio/speech endpoint:
 - requesty: OpenAI only, default openai/gpt-4o-mini-tts (also openai/tts-1, openai/tts-1-hd); voice
   alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer or verse (default alloy); text up
   to 4096 characters; no cost in the reply.
-Voices are model-specific: list_models kind='speech' lists models and prices (and voices on llmgateway).
+Voices are model-specific. To pick a model: list_models kind='speech' (cheapest first, with voices); for
+a given voice, list_models kind='speech' voice=<name> on each provider and take the cheapest match (e.g.
+voice Aoede: openrouter google/gemini-3.8-flash-lite-tts was cheapest in 2026-11).
 instructions (a style direction such as "calm, slow, warm") works on gpt-4o-mini-tts, Gemini TTS and
 some others; speed (0.25-4) on OpenAI and ElevenLabs. Default to the provider's default model; prices
 are per character or per token, so long texts cost more: tell the user before a long or repeated run.
