@@ -34,7 +34,7 @@ FILE_TTL_HOURS = float(os.environ.get('FILE_TTL_HOURS', '168'))
 PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://127.0.0.1:8000').rstrip('/')
 MAX_REF_BYTES = int(os.environ.get('MAX_REF_BYTES', str(15 * 1024 * 1024)))
 
-NAME_RE = re.compile(r'^[A-Za-z0-9_-]{16,64}\.(webp|mp4|png|jpg)$')
+NAME_RE = re.compile(r'^[A-Za-z0-9_-]{16,64}\.(webp|mp4|png|jpg|mp3|wav|opus|aac|flac)$')
 _lock = threading.Lock()
 
 

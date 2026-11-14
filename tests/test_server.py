@@ -67,7 +67,26 @@ class Stub(BaseHTTPRequestHandler):
                                'usage': {'cost': 0.018}})
         if self.path == '/lg/images/generations':
             return self.reply({'data': []})
+        if self.path == '/or/audio/speech':
+            return self.raw(b'ID3\x04\x00fake-mp3', 'audio/mpeg')
+        if self.path == '/lg/audio/speech':
+            if payload.get('voice') == 'no-sse':
+                if 'stream_format' in payload:
+                    return self.reply({'error': 'stream_format not supported'}, 400)
+                return self.raw(b'ID3\x04\x00binary', 'audio/mpeg')
+            delta = base64.b64encode(b'\x01\x00' * 100).decode()  # raw pcm, as Gemini sends
+            sse = (f'event: speech.audio.delta\ndata: {{"type":"speech.audio.delta","audio":"{delta}"}}\n\n'
+                   'event: speech.audio.done\ndata: {"type":"speech.audio.done","usage":{"input_tokens":7,'
+                   '"output_tokens":42,"cost":0.0005}}\n\ndata: [DONE]\n\n')
+            return self.raw(sse.encode(), 'text/event-stream')
         self.reply({'error': 'nope'}, 404)
+
+    def raw(self, body, ctype):
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 stub_port, app_port = free_port(), free_port()
@@ -218,7 +237,44 @@ def test_clients_cannot_forge_the_path_marker():
     assert out['requesty'] == 'no key sent'
 
 
+def test_speech_openrouter_asks_for_mp3_and_serves_it():
+    res = run('generate_speech', {'text': 'hello there', 'voice': 'en_paul_neutral', 'response_format': 'wav'},
+              {'X-OpenRouter-Key': 'or-good'})
+    assert not res.is_error, res.content[0].text
+    out = json.loads(res.content[0].text)
+    assert SEEN['payload'] == {'model': 'mistralai/voxtral-mini-tts-2603', 'input': 'hello there',
+                               'voice': 'en_paul_neutral', 'response_format': 'mp3'}
+    assert out['format'] == 'mp3' and out['cost_usd'] is None and any('mp3' in n for n in out['notes'])
+    with urllib.request.urlopen(out['url']) as resp:
+        assert resp.headers['Content-Type'] == 'audio/mpeg' and resp.read().startswith(b'ID3')
+
+
+def test_speech_llmgateway_sse_gives_cost_and_wraps_pcm():
+    res = run('generate_speech', {'text': 'hej', 'provider': 'llmgateway', 'voice': 'Kore', 'inline': 'full'},
+              {'X-LLMGateway-Key': 'k'})
+    assert not res.is_error, res.content[0].text
+    out = json.loads(res.content[0].text)
+    assert SEEN['payload']['stream_format'] == 'sse'
+    assert out['cost_usd'] == 0.0005 and out['format'] == 'wav' and out['usage']['output_tokens'] == 42
+    assert res.content[1].type == 'audio' and res.content[1].mime_type == 'audio/wav'
+    assert base64.b64decode(res.content[1].data)[:4] == b'RIFF'
+    assert store.read_costs()['llmgateway-speech/gemini-2.5-flash-preview-tts']['last_cost'] == 0.0005
+
+
 def test_upload_on_a_provider_path_with_x_api_key():
     req = urllib.request.Request(f'http://127.0.0.1:{app_port}/openrouter/upload', data=png(), method='POST',
                                  headers={'X-API-Key': 'or-good'})
     assert json.loads(urllib.request.urlopen(req).read())['url'].startswith(f'http://127.0.0.1:{app_port}/files/')
+
+
+def test_speech_llmgateway_falls_back_to_binary_when_sse_is_refused():
+    res = run('generate_speech', {'text': 'hej', 'provider': 'llmgateway', 'voice': 'no-sse'}, {'X-LLMGateway-Key': 'k'})
+    assert not res.is_error, res.content[0].text
+    out = json.loads(res.content[0].text)
+    assert 'stream_format' not in SEEN['payload'] and out['format'] == 'mp3' and out['cost_usd'] is None
+    assert any('sse' in n for n in out['notes'])
+
+
+def test_speech_requesty_length_limit():
+    res = run('generate_speech', {'text': 'a' * 4097, 'provider': 'requesty'}, {'X-Requesty-Key': 'k'})
+    assert res.is_error and '4096' in res.content[0].text

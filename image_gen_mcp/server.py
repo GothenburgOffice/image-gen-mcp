@@ -17,7 +17,7 @@ import anyio
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp_types import ImageContent, TextContent
+from mcp_types import AudioContent, ImageContent, TextContent
 from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -31,6 +31,11 @@ DEFAULT_MODELS = {
     'llmgateway': os.environ.get('DEFAULT_LLMGATEWAY_MODEL', 'qwen-image-2.1-turbo'),
     'requesty': os.environ.get('DEFAULT_REQUESTY_MODEL', 'vertex/google/gemini-2.5-flash-image'),
 }
+DEFAULT_SPEECH_MODELS = {
+    'openrouter': os.environ.get('DEFAULT_OPENROUTER_SPEECH_MODEL', 'mistralai/voxtral-mini-tts-2603'),
+    'llmgateway': os.environ.get('DEFAULT_LLMGATEWAY_SPEECH_MODEL', 'gemini-2.5-flash-preview-tts'),
+    'requesty': os.environ.get('DEFAULT_REQUESTY_SPEECH_MODEL', 'openai/gpt-4o-mini-tts'),
+}
 SERVER_TOKEN = os.environ.get('SERVER_TOKEN', '').strip()
 TRUSTED_IP_HEADER = os.environ.get('TRUSTED_IP_HEADER', '').strip().lower()
 PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '').strip()
@@ -41,7 +46,8 @@ INSTRUCTIONS = f"""Image and video generation through OpenRouter, LLM Gateway an
 caller's own provider keys (headers X-OpenRouter-Key, X-LLMGateway-Key, X-Requesty-Key, or X-API-Key
 for the provider in the URL path; the server stores none). With no provider given, tools use the
 connection's provider (/llmgateway/mcp, /requesty/mcp), else openrouter. Use generate_image for images, list_models for models and prices,
-key_status for what is left on the keys, generate_video / video_status for short clips.
+key_status for what is left on the keys, generate_video / video_status for short clips,
+generate_speech for text to speech (all three providers).
 
 Rules:
 - Cheapest suitable model at its lowest quality is the standard; spend more only when the user
@@ -282,8 +288,10 @@ def _b64(data: bytes) -> str:
 
 
 @mcp.tool(
-    description=f"""List image models (or video models with kind='video') with prices, for one provider, plus
-the costs actually seen in real runs on this server. Use it to pick the cheapest suitable model.
+    description=f"""List image models (video models with kind='video', text-to-speech models with
+kind='speech') with prices, for one provider, plus the costs actually seen in real runs on this server.
+Use it to pick the cheapest suitable model. kind='speech' works for all three providers (llmgateway
+also lists each model's voices).
 openrouter: every image model with its lowest output price and max reference images (first call can
 take ~20 s, then cached 6 h). llmgateway: estimated price per image at the lowest tier and whether it
 takes references. requesty: image models with their pricing (prefer the vendor-prefixed ids, e.g.
@@ -296,7 +304,7 @@ async def list_models(
     ctx: Context,
     provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Which provider. Empty: the provider in the connection URL, else openrouter.')] = None,
     filter: Annotated[str | None, Field(description='Only ids containing this text.')] = None,
-    kind: Annotated[Literal['image', 'video'], Field(description='video lists OpenRouter video models (per-second prices).')] = 'image',
+    kind: Annotated[Literal['image', 'video', 'speech'], Field(description='video lists OpenRouter video models (per-second prices); speech lists text-to-speech models.')] = 'image',
 ) -> list:
     provider = 'openrouter' if kind == 'video' else _provider(ctx, provider)
     key = _key(ctx, provider)
@@ -304,6 +312,8 @@ async def list_models(
     def call():
         if kind == 'video':
             return providers.video_models(key)
+        if kind == 'speech':
+            return providers.speech_models(provider, key)
         if provider == 'openrouter':
             return [{k: v for k, v in r.items() if k != 'sort'} for r in providers.openrouter_prices(key)]
         if provider == 'llmgateway':
@@ -316,9 +326,10 @@ async def list_models(
         raise ToolError(str(e)) from None
     if filter:
         rows = [r for r in rows if filter.lower() in r['id'].lower()]
-    prefix = f'{provider}-video/' if kind == 'video' else f'{provider}/'
+    prefix = f'{provider}/' if kind == 'image' else f'{provider}-{kind}/'
     seen = {k[len(prefix):]: v for k, v in store.read_costs().items() if k.startswith(prefix)}
-    return [_text({'provider': provider, 'kind': kind, 'default_model': None if kind == 'video' else DEFAULT_MODELS[provider],
+    default = {'image': DEFAULT_MODELS, 'speech': DEFAULT_SPEECH_MODELS}.get(kind, {}).get(provider)
+    return [_text({'provider': provider, 'kind': kind, 'default_model': default,
                    'models': rows, 'observed_costs': seen,
                    'note': 'Reference images can add a per-image input charge; the cost in each reply is what was billed.'})]
 
@@ -474,6 +485,81 @@ async def video_status(
     return [_text(await _wait_video(key, job_id, wait_seconds, None, {'size': None, 'quality': None, 'refs': 0}, ''))]
 
 
+# ---------------------------------------------------------------- speech
+@mcp.tool(
+    description=f"""Text to speech: turn text into an audio file (mp3, wav, ...) and return an HTTPS URL to it
+(valid {TTL_TEXT}; download it with curl to keep it). Billed to the caller's key for the chosen provider.
+All three providers have it, through an OpenAI-style /audio/speech endpoint:
+- openrouter: default model mistralai/voxtral-mini-tts-2603; returns mp3 (other formats are not offered);
+  no cost in the reply, check key_status.
+- llmgateway: default gemini-2.5-flash-preview-tts (voice e.g. Kore, Puck, Zephyr; wav). Also ElevenLabs
+  (eleven-multilingual-v2, eleven-flash-v2-5; voice e.g. Sarah, Aria, Roger; mp3) and others. The reply
+  gives the real cost.
+- requesty: OpenAI only, default openai/gpt-4o-mini-tts (also openai/tts-1, openai/tts-1-hd); voice
+  alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer or verse (default alloy); text up
+  to 4096 characters; no cost in the reply.
+Voices are model-specific: list_models kind='speech' lists models and prices (and voices on llmgateway).
+instructions (a style direction such as "calm, slow, warm") works on gpt-4o-mini-tts, Gemini TTS and
+some others; speed (0.25-4) on OpenAI and ElevenLabs. Default to the provider's default model; prices
+are per character or per token, so long texts cost more: tell the user before a long or repeated run.
+Never switch provider or key after an HTTP 402 (spending limit): stop and tell the user.
+inline: 'none' (default) or 'full' (also return the audio inline, for clients that play it).""",
+    structured_output=False,
+)
+async def generate_speech(
+    text: Annotated[str, Field(description='What to say.', min_length=1, max_length=20000)],
+    ctx: Context,
+    provider: Annotated[Literal['openrouter', 'llmgateway', 'requesty'] | None, Field(description='Whose API and key to use. Empty: the provider in the connection URL, else openrouter.')] = None,
+    model: Annotated[str | None, Field(description='Speech model id; empty for the provider default. See list_models kind=speech.')] = None,
+    voice: Annotated[str | None, Field(description='Voice name or id for the model (e.g. alloy, Kore, Sarah).')] = None,
+    response_format: Annotated[Literal['mp3', 'wav', 'opus', 'aac', 'flac'] | None, Field(description='Audio format where the model offers it; empty for its default.')] = None,
+    speed: Annotated[float | None, Field(description='0.25-4, where the model takes it.', ge=0.25, le=4)] = None,
+    instructions: Annotated[str | None, Field(description='Style direction, where the model takes it.', max_length=4000)] = None,
+    inline: Annotated[Literal['none', 'full'], Field(description='Also return the audio inline.')] = 'none',
+) -> list:
+    provider = _provider(ctx, provider)
+    key = _key(ctx, provider)
+    model = model or DEFAULT_SPEECH_MODELS[provider]
+    if provider == 'requesty':
+        if len(text) > 4096:
+            raise ToolError(f'Requesty speech takes at most 4096 characters, not {len(text)}: split the text '
+                            'into several calls, or use another provider')
+        voice = voice or 'alloy'
+    _rate(ctx)
+    shape = {'size': f'{len(text)} chars', 'quality': voice, 'refs': 0}
+
+    def call():
+        return providers.speech_generate(provider, key, model=model, text=text, voice=voice,
+                                         response_format=response_format, speed=speed, instructions=instructions)
+
+    try:
+        result = await anyio.to_thread.run_sync(call)
+    except providers.ProviderError as e:
+        store.log_rejection(f'{provider}-speech', e.endpoint, model, shape, e.kind, str(e), e.status, text)
+        raise ToolError(str(e)) from None
+    audio, ext = result['audio'], result['ext']
+    _, url = store.save_file(audio, ext)
+    store.log_cost(f'{provider}-speech', model, result['cost'], shape)
+    summary = {'provider': provider, 'model': model, 'voice': voice, 'url': url, 'format': ext, 'bytes': len(audio),
+               'characters': len(text), 'cost_usd': result['cost'], 'expires_in': TTL_TEXT,
+               'download': f'curl -fsSL -o speech.{ext} "{url}"'}
+    if result['cost'] is None:
+        summary['cost_note'] = 'The provider reports no cost for speech; see list_models kind=speech for prices.'
+    if result['usage']:
+        summary['usage'] = {k: v for k, v in result['usage'].items() if k != 'cost'}
+    if result['notes']:
+        summary['notes'] = result['notes']
+    if provider == 'openrouter':
+        try:
+            summary['key_status'] = (await anyio.to_thread.run_sync(providers.openrouter_key_status, key))['summary']
+        except Exception:
+            pass
+    content = [_text(summary)]
+    if inline == 'full':
+        content.append(AudioContent(type='audio', data=_b64(audio), mime_type=providers.AUDIO_EXT[ext]))
+    return content
+
+
 # ---------------------------------------------------------------- HTTP routes
 @mcp.custom_route('/health', methods=['GET'])
 async def health(request: Request) -> Response:
@@ -486,7 +572,8 @@ async def files(request: Request) -> Response:
     if not p:
         return JSONResponse({'error': 'not found or expired'}, status_code=404)
     ext = p.rsplit('.', 1)[-1]
-    media = {'webp': 'image/webp', 'mp4': 'video/mp4', 'png': 'image/png', 'jpg': 'image/jpeg'}[ext]
+    media = {'webp': 'image/webp', 'mp4': 'video/mp4', 'png': 'image/png', 'jpg': 'image/jpeg',
+             **providers.AUDIO_EXT}[ext]
     return FileResponse(p, media_type=media, headers={'Cache-Control': 'private, max-age=86400',
                                                       'X-Content-Type-Options': 'nosniff'})
 
