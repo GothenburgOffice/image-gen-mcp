@@ -514,8 +514,9 @@ async def video_status(
 (valid {TTL_TEXT}; download it with curl to keep it). Billed to the caller's key for the chosen provider.
 All three providers have it, through an OpenAI-style /audio/speech endpoint, each with its own key
 (its header on any connection, or X-API-Key on its /<provider>/mcp URL):
-- openrouter: default model mistralai/voxtral-mini-tts-2603; returns mp3 (other formats are not offered);
-  no cost in the reply, check key_status.
+- openrouter: default model mistralai/voxtral-mini-tts-2603; it needs an explicit voice (e.g.
+  en_paul_neutral, gb_jane_neutral, fr_marie_neutral: HTTP 400 without one); returns mp3 (other formats
+  are not offered); no cost in the reply, check key_status.
 - llmgateway: default gemini-2.5-flash-preview-tts (voice e.g. Kore, Puck, Zephyr; wav). Also ElevenLabs
   (eleven-multilingual-v2, eleven-flash-v2-5; voice e.g. Sarah, Aria, Roger; mp3) and others. The reply
   gives the real cost.

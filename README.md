@@ -60,7 +60,7 @@ can pass `inline: "full"` or `"none"` instead. The full WebP is at
 `curl -fsSL -o out.webp <url>`.
 
 **Speech.** `generate_speech` defaults to `mistralai/voxtral-mini-tts-2603` on OpenRouter (MP3
-only), `gemini-2.5-flash-preview-tts` on LLM Gateway (WAV; ElevenLabs models too) and
+only; it needs an explicit `voice`, e.g. `en_paul_neutral`), `gemini-2.5-flash-preview-tts` on LLM Gateway (WAV; ElevenLabs models too) and
 `openai/gpt-4o-mini-tts` on Requesty (which also lists DeepInfra models such as Kokoro and Chatterbox;
 only the OpenAI models show voices). Each provider needs its own key, so `list_models` or
 `generate_speech` for a provider you sent no key for fails: add its header or use its `/<provider>/mcp`
