@@ -2,28 +2,38 @@
 
 A remote MCP server (streamable HTTP) for image, short-video and speech (text-to-speech) generation through
 [OpenRouter](https://openrouter.ai), [LLM Gateway](https://llmgateway.io) and
-[Requesty](https://requesty.ai). Any MCP client, such as Claude Code (local, desktop or cloud),
-can generate images and audio through it without knowing the provider APIs.
+[Requesty](https://requesty.ai). It works in every Claude surface (the Desktop app's Chat and Code tabs, claude.ai and Claude
+Code cloud sessions) through custom connectors, and with any other MCP client.
 
-Public instance: `https://imagemcp.gothenburgoffice.se/mcp`
+Endpoints, one per provider:
+
+| URL | Provider |
+|---|---|
+| `https://imagemcp.gothenburgoffice.se/openrouter/mcp` | OpenRouter: images, video, speech and spending status |
+| `https://imagemcp.gothenburgoffice.se/llmgateway/mcp` | LLM Gateway: images and speech |
+| `https://imagemcp.gothenburgoffice.se/requesty/mcp` | Requesty: images and speech |
 
 ## Bring your own key
 
-The server stores **no provider keys**. Every client sends its own keys as HTTP headers, and
-each call is billed to that key:
+The server stores **no provider keys**. Each connection sends its provider's key in the
+standard header `X-API-Key: <key>`, and each call is billed to that key. Setup is under
+[Connect a client](#connect-a-client).
 
-| Header | Provider |
-|---|---|
-| `X-OpenRouter-Key` | OpenRouter: images, video, speech and spending status |
-| `X-LLMGateway-Key` | LLM Gateway: images and speech |
-| `X-Requesty-Key` | Requesty: images and speech |
-| `X-API-Key` | The provider named in the URL: `/mcp` or `/openrouter/mcp` → OpenRouter, `/llmgateway/mcp` → LLM Gateway, `/requesty/mcp` → Requesty. For clients that can only send a standard header name |
+The server forwards a key to its own provider and does nothing else with it: keys are not
+logged, not written to disk and never returned. The server is open to anyone, but it can only
+spend the caller's own credit. It limits paid calls per client IP (20 a minute and 500 a day by
+default). Set a spending limit on your keys at the provider: the server reports HTTP 402 as
+"limit reached".
 
-Send only the keys you want to use. The server forwards a key to its own provider and does
-nothing else with it: keys are not logged, not written to disk and never returned. The server is
-open to anyone, but it can only spend the caller's own credit. It limits paid calls per client
-IP (20 a minute and 500 a day by default). Set a spending limit on your keys at the provider:
-the server reports HTTP 402 as "limit reached".
+<details>
+<summary>Alternative: one connection with several keys</summary>
+
+A client that may use custom header names, such as the `claude` CLI, can send several keys on
+the plain `/mcp` URL: `X-OpenRouter-Key`, `X-LLMGateway-Key` and `X-Requesty-Key`. The tools
+then take a `provider` argument. Claude's connector dialog needs Anthropic's approval for custom
+header names, so connectors use `X-API-Key`.
+
+</details>
 
 ## Tools
 
@@ -60,7 +70,7 @@ URL, a `/files/` URL from an earlier result, a data URL or base64. To use a loca
 first:
 
 ```bash
-curl -fsS -X POST --data-binary @portrait.webp -H "X-OpenRouter-Key: $OPENROUTER_API_KEY" https://imagemcp.gothenburgoffice.se/upload
+curl -fsS -X POST --data-binary @portrait.webp -H "X-API-Key: $OPENROUTER_API_KEY" https://imagemcp.gothenburgoffice.se/openrouter/upload
 ```
 
 The upload returns `{"url": ...}`; pass that URL in `refs`. An upload needs a key that its
@@ -148,6 +158,11 @@ DATA_DIR=.localdata PORT=8765 .venv/bin/python -m image_gen_mcp
 .venv/bin/python scripts/smoke.py http://127.0.0.1:8765/mcp --generate   # one cheap image (~$0.002–0.02)
 ```
 
-The provider code is ported from the image-generation scripts in DreamGen Studio
-(`tools/image-gen/`). The endpoints, request shapes and provider quirks are the same; they are
-documented at the top of `image_gen_mcp/providers.py`.
+## Origin and license
+
+The provider code is ported from image-generation scripts in the author's private repository,
+where it was written and tested against the live provider APIs. The endpoints, request shapes
+and provider quirks are unchanged; they are documented at the top of
+`image_gen_mcp/providers.py`.
+
+MIT License, © 2026 Gothenburg Office: see [LICENSE](LICENSE).

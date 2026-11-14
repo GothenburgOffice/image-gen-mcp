@@ -255,3 +255,9 @@ def test_speech_llmgateway_sse_gives_cost_and_wraps_pcm():
     assert res.content[1].type == 'audio' and res.content[1].mime_type == 'audio/wav'
     assert base64.b64decode(res.content[1].data)[:4] == b'RIFF'
     assert store.read_costs()['llmgateway-speech/gemini-2.5-flash-preview-tts']['last_cost'] == 0.0005
+
+
+def test_upload_on_a_provider_path_with_x_api_key():
+    req = urllib.request.Request(f'http://127.0.0.1:{app_port}/openrouter/upload', data=png(), method='POST',
+                                 headers={'X-API-Key': 'or-good'})
+    assert json.loads(urllib.request.urlopen(req).read())['url'].startswith(f'http://127.0.0.1:{app_port}/files/')
