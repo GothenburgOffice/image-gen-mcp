@@ -70,6 +70,10 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == '/or/audio/speech':
             return self.raw(b'ID3\x04\x00fake-mp3', 'audio/mpeg')
         if self.path == '/lg/audio/speech':
+            if payload.get('voice') == 'no-sse':
+                if 'stream_format' in payload:
+                    return self.reply({'error': 'stream_format not supported'}, 400)
+                return self.raw(b'ID3\x04\x00binary', 'audio/mpeg')
             delta = base64.b64encode(b'\x01\x00' * 100).decode()  # raw pcm, as Gemini sends
             sse = (f'event: speech.audio.delta\ndata: {{"type":"speech.audio.delta","audio":"{delta}"}}\n\n'
                    'event: speech.audio.done\ndata: {"type":"speech.audio.done","usage":{"input_tokens":7,'
@@ -261,3 +265,16 @@ def test_upload_on_a_provider_path_with_x_api_key():
     req = urllib.request.Request(f'http://127.0.0.1:{app_port}/openrouter/upload', data=png(), method='POST',
                                  headers={'X-API-Key': 'or-good'})
     assert json.loads(urllib.request.urlopen(req).read())['url'].startswith(f'http://127.0.0.1:{app_port}/files/')
+
+
+def test_speech_llmgateway_falls_back_to_binary_when_sse_is_refused():
+    res = run('generate_speech', {'text': 'hej', 'provider': 'llmgateway', 'voice': 'no-sse'}, {'X-LLMGateway-Key': 'k'})
+    assert not res.is_error, res.content[0].text
+    out = json.loads(res.content[0].text)
+    assert 'stream_format' not in SEEN['payload'] and out['format'] == 'mp3' and out['cost_usd'] is None
+    assert any('sse' in n for n in out['notes'])
+
+
+def test_speech_requesty_length_limit():
+    res = run('generate_speech', {'text': 'a' * 4097, 'provider': 'requesty'}, {'X-Requesty-Key': 'k'})
+    assert res.is_error and '4096' in res.content[0].text

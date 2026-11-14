@@ -520,8 +520,11 @@ async def generate_speech(
     provider = _provider(ctx, provider)
     key = _key(ctx, provider)
     model = model or DEFAULT_SPEECH_MODELS[provider]
-    if provider == 'requesty' and not voice:
-        voice = 'alloy'
+    if provider == 'requesty':
+        if len(text) > 4096:
+            raise ToolError(f'Requesty speech takes at most 4096 characters, not {len(text)}: split the text '
+                            'into several calls, or use another provider')
+        voice = voice or 'alloy'
     _rate(ctx)
     shape = {'size': f'{len(text)} chars', 'quality': voice, 'refs': 0}
 

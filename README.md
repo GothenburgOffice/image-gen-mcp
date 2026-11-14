@@ -44,7 +44,7 @@ header names, so connectors use `X-API-Key`.
 | `key_status` | Which keys the connection sends; for OpenRouter, the limit, what is left and today's use |
 | `recent_rejections` | Recent refused or failed requests (no prompts kept), useful before retrying a refused prompt |
 | `generate_video` / `video_status` | OpenRouter video jobs: submit, wait, return an MP4 URL; resume a job without paying again |
-| `generate_speech` | Text to speech on any of the three providers (`/audio/speech`): text → an MP3/WAV URL. Options: provider, model, voice, format, speed, instructions |
+| `generate_speech` | Text to speech on any of the three providers (`/audio/speech`): text → an MP3/WAV URL. Options: provider, model, voice, response_format, speed, instructions |
 
 The tool descriptions carry the usage rules and known prices: the cheapest suitable model by
 default, a price check before a batch, and stopping at a spending limit. A client needs nothing

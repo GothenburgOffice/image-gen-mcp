@@ -452,7 +452,16 @@ def speech_generate(provider: str, key: str, *, model: str, text: str, voice=Non
     sse = provider == 'llmgateway' or (provider == 'requesty' and 'gpt-4o-mini-tts' in model)
     if sse:
         payload['stream_format'] = 'sse'
-    raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
+    try:
+        raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
+    except ProviderError as e:
+        # LLM Gateway documents SSE, but if a model refuses it (400, not billed), ask once more for
+        # plain binary audio: the audio matters more than seeing the cost.
+        if not (provider == 'llmgateway' and e.status == 400):
+            raise
+        del payload['stream_format']
+        notes.append('LLM Gateway refused stream_format=sse for this model; plain audio asked for, so no cost')
+        raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
     usage = None
     if raw.lstrip()[:5] in (b'data:', b'event') or raw.lstrip()[:1] == b':':
         audio, usage = _parse_speech_sse(raw, endpoint)
