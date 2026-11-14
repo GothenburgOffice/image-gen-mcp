@@ -77,6 +77,10 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == '/lg/images/generations':
             return self.reply({'data': []})
         if self.path == '/or/audio/speech':
+            if payload.get('model', '').startswith('google/'):
+                if payload.get('response_format') != 'pcm':
+                    return self.reply({'error': {'message': 'Gemini TTS only supports response_format="pcm". Got "mp3".'}}, 400)
+                return self.raw(b'\xff\xf3' + b'\x00' * 98, 'audio/pcm')  # pcm that happens to look like mp3
             return self.raw(b'ID3\x04\x00fake-mp3', 'audio/mpeg')
         if self.path == '/lg/audio/speech':
             if payload.get('voice') == 'no-sse':
@@ -300,3 +304,13 @@ def test_speech_models_ranked_with_voice_filter():
     rows = json.loads(res.content[0].text)['models']
     assert rows[0]['id'] == 'cheap/chars' and rows[-1]['id'] == 'odd/unit'
     assert rows[-1]['est_usd_per_1000_chars'] is None
+
+
+def test_speech_openrouter_gemini_falls_back_to_pcm_as_wav():
+    res = run('generate_speech', {'text': 'hej', 'model': 'google/gemini-tts', 'voice': 'Aoede'},
+              {'X-OpenRouter-Key': 'or-good'})
+    assert not res.is_error, res.content[0].text
+    out = json.loads(res.content[0].text)
+    assert SEEN['payload']['response_format'] == 'pcm' and out['format'] == 'wav'
+    with urllib.request.urlopen(out['url']) as resp:
+        assert resp.headers['Content-Type'] == 'audio/wav' and resp.read()[:4] == b'RIFF'

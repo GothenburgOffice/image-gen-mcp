@@ -485,7 +485,8 @@ def speech_generate(provider: str, key: str, *, model: str, text: str, voice=Non
                     speed=None, instructions=None) -> dict:
     """POST /audio/speech. Returns {'audio', 'ext', 'cost', 'usage', 'notes', 'endpoint'}.
 
-    OpenRouter answers with raw bytes (mp3 or pcm only; mp3 is asked for). LLM Gateway is asked for
+    OpenRouter answers with raw bytes (mp3 or pcm only; mp3 is asked for, pcm when the model refuses
+    mp3, as Gemini TTS does). LLM Gateway is asked for
     SSE, the only way it reports a cost. Requesty's gpt-4o-mini-tts needs SSE (and the tts-1 models
     refuse it); its stream carries tokens, not cost."""
     endpoint = f'{SPEECH_BASES[provider]()}/audio/speech'
@@ -505,12 +506,21 @@ def speech_generate(provider: str, key: str, *, model: str, text: str, voice=Non
     try:
         raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
     except ProviderError as e:
-        # LLM Gateway documents SSE, but if a model refuses it (400, not billed), ask once more for
-        # plain binary audio: the audio matters more than seeing the cost.
-        if not (provider == 'llmgateway' and e.status == 400):
+        # A refusal (HTTP 400) is not billed, so one corrected retry costs nothing extra.
+        if e.status != 400:
             raise
-        del payload['stream_format']
-        notes.append('LLM Gateway refused stream_format=sse for this model; plain audio asked for, so no cost')
+        if provider == 'llmgateway':
+            # LLM Gateway documents SSE, but if a model refuses it, ask for plain binary audio:
+            # the audio matters more than seeing the cost.
+            del payload['stream_format']
+            notes.append('LLM Gateway refused stream_format=sse for this model; plain audio asked for, so no cost')
+        elif provider == 'openrouter' and 'pcm' in str(e):
+            # Some OpenRouter models (Gemini TTS, seen 2026-11-14) only return pcm: ask for it and
+            # wrap it as WAV below.
+            payload['response_format'] = 'pcm'
+            notes.append(f'{model} refused mp3 on OpenRouter (pcm only); pcm asked for')
+        else:
+            raise
         raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
     usage = None
     if raw.lstrip()[:5] in (b'data:', b'event') or raw.lstrip()[:1] == b':':
@@ -519,7 +529,8 @@ def speech_generate(provider: str, key: str, *, model: str, text: str, voice=Non
         audio = raw
     if not audio:
         raise ProviderError('Empty audio reply', 'empty', None, endpoint)
-    ext = sniff_audio(audio)
+    # Raw PCM can start with bytes that look like an mp3 frame, so don't sniff what was asked for as pcm.
+    ext = None if payload.get('response_format') == 'pcm' else sniff_audio(audio)
     if ext is None:
         if audio.lstrip()[:1] == b'{':
             raise ProviderError(f'Provider sent JSON, not audio: {audio[:600]!r}', 'reply', None, endpoint)
