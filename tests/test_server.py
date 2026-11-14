@@ -58,7 +58,8 @@ class Stub(BaseHTTPRequestHandler):
                  'supported_voices': ['af_bella']},
                 {'id': 'google/tts-pro', 'pricing': {'prompt': '0.000001', 'completion': '0.00002'},
                  'supported_voices': ['Aoede']},
-                {'id': 'odd/unit', 'pricing': {'prompt': '0', 'completion': '0.0025'}, 'supported_voices': []}]})
+                {'id': 'odd/unit', 'pricing': {'prompt': '0', 'completion': '0.0025'}, 'supported_voices': []},
+                {'id': 'odd/cheap-unit', 'pricing': {'prompt': '0', 'completion': '0.00001'}, 'supported_voices': []}]})
         elif self.path == '/or/key':
             if self.headers.get('Authorization') != 'Bearer or-good':
                 return self.reply({'error': 'bad key'}, 401)
@@ -302,8 +303,8 @@ def test_speech_models_ranked_with_voice_filter():
     assert 'Aoede' in rows[0]['voices'] and '/ $6.00 per million' in rows[0]['price']
     res = run('list_models', {'kind': 'speech'}, {'X-OpenRouter-Key': 'or-good'})
     rows = json.loads(res.content[0].text)['models']
-    assert rows[0]['id'] == 'cheap/chars' and rows[-1]['id'] == 'odd/unit'
-    assert rows[-1]['est_usd_per_1000_chars'] is None
+    assert rows[0]['id'] == 'cheap/chars' and {r['id'] for r in rows[-2:]} == {'odd/unit', 'odd/cheap-unit'}
+    assert rows[-1]['est_usd_per_1000_chars'] is None and rows[-2]['est_usd_per_1000_chars'] is None
 
 
 def test_speech_openrouter_gemini_falls_back_to_pcm_as_wav():
@@ -314,3 +315,22 @@ def test_speech_openrouter_gemini_falls_back_to_pcm_as_wav():
     assert SEEN['payload']['response_format'] == 'pcm' and out['format'] == 'wav'
     with urllib.request.urlopen(out['url']) as resp:
         assert resp.headers['Content-Type'] == 'audio/wav' and resp.read()[:4] == b'RIFF'
+
+
+def test_llmgateway_speech_list_keeps_voiceless_models_and_drops_realtime():
+    from image_gen_mcp import providers
+    catalog = {'data': [
+        {'id': 'tts-novoice', 'architecture': {'output_modalities': ['audio']}, 'providers': [{}],
+         'pricing': {'input_character': '15e-6'}},
+        {'id': 'realtime', 'architecture': {'output_modalities': ['text', 'audio']},
+         'providers': [{'supported_voices': ['alloy']}], 'pricing': {'prompt': '1e-6'}},
+        {'id': 'chat', 'architecture': {'output_modalities': ['text']}, 'providers': [{}], 'pricing': {}}]}
+    real = providers._json
+    providers._json = lambda *a, **k: catalog
+    providers._cache.pop('llmg-speech-models', None)
+    try:
+        rows = providers.speech_models('llmgateway', 'k')
+    finally:
+        providers._json = real
+        providers._cache.pop('llmg-speech-models', None)
+    assert [r['id'] for r in rows] == ['tts-novoice'] and rows[0]['voices'] == []

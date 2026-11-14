@@ -423,7 +423,7 @@ def _speech_row(mid: str, voices, *, per_char=0.0, per_in_token=0.0, per_out_tok
     if per_char:
         est = per_char * 1000
         text = f'${per_char * 1e6:.2f} per million characters'
-    elif per_out_token > 1e-4 and not per_in_token:  # too dear to be per token: unit not stated
+    elif per_out_token and not per_in_token:  # an output price alone says nothing of its unit
         est = None
         text = f'${per_out_token:g} per output unit (unit not stated; run once and read the cost)'
     elif per_in_token or per_out_token:
@@ -461,8 +461,9 @@ def speech_models(provider: str, key: str) -> list[dict]:
             for m in data.get('data', data) if isinstance(data, dict) else data:
                 outs = set((m.get('architecture') or {}).get('output_modalities', []))
                 voices = {v for p in m.get('providers') or [] for v in (p.get('supported_voices') or [])}
-                # Plain text-to-speech only: realtime/live models also output text and are not /audio/speech models.
-                if not voices or 'text' in outs:
+                # Plain text-to-speech only: realtime/live models also output text and are not /audio/speech
+                # models. A speech model may list no voices; it is kept, with an empty list.
+                if not ({'audio', 'speech'} & outs or voices) or 'text' in outs:
                     continue
                 pr = m.get('pricing') or {}
                 rows.append(_speech_row(m['id'], voices, per_char=_f(pr.get('input_character')),
