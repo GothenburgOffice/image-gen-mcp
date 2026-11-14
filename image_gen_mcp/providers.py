@@ -35,6 +35,17 @@ OpenRouter video
   cancelled / expired; GET /videos/{id}/content?index=0 is the MP4. Frames go in
   frame_images (first_frame / last_frame), references in input_references. Video models take
   JPEG or PNG only. Reference video and audio must be HTTPS URLs.
+
+Speech (text to speech), all three: POST /audio/speech, OpenAI-style {model, input, voice,
+response_format, speed, instructions}.
+- OpenRouter: raw bytes, mp3 or pcm only (default pcm, so mp3 is asked for); no cost in the reply.
+  Models: GET /models?output_modalities=speech.
+- LLM Gateway: raw bytes, or with stream_format=sse base64 speech.audio.delta events and a final
+  speech.audio.done carrying usage.cost (the only place the cost shows). Models: GET /models,
+  speech models have supported_voices / an audio output modality. Gemini sends wav/pcm.
+- Requesty: OpenAI models only (gpt-4o-mini-tts, tts-1, tts-1-hd); voice required; input up to
+  4096 chars; gpt-4o-mini-tts only with stream_format=sse and tts-1* only without. Models:
+  /models/all with api == "speech". No cost in the reply.
 """
 from __future__ import annotations
 
@@ -343,3 +354,122 @@ def video_job(key: str, job_id: str) -> dict:
 
 def video_content(key: str, job_id: str) -> bytes:
     return _request(f'{OPENROUTER}/videos/{job_id}/content?index=0', key, timeout=600)
+
+
+# ---------------------------------------------------------------- speech (text to speech)
+SPEECH_BASES = {'openrouter': lambda: OPENROUTER, 'llmgateway': lambda: LLMGATEWAY, 'requesty': lambda: REQUESTY}
+AUDIO_EXT = {'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'opus': 'audio/ogg', 'aac': 'audio/aac', 'flac': 'audio/flac'}
+
+
+def sniff_audio(data: bytes) -> str | None:
+    """File extension from the magic bytes, or None (raw PCM or unknown)."""
+    if data[:3] == b'ID3':
+        return 'mp3'
+    if data[:4] == b'RIFF' and data[8:12] == b'WAVE':
+        return 'wav'
+    if data[:4] == b'OggS':
+        return 'opus'
+    if data[:4] == b'fLaC':
+        return 'flac'
+    if len(data) > 1 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0:
+        return 'aac' if data[1] & 0x06 == 0 else 'mp3'  # layer bits 00 = ADTS (AAC)
+    return None
+
+
+def pcm_to_wav(pcm: bytes, rate: int = 24000) -> bytes:
+    """16-bit little-endian mono PCM (what OpenAI, Gemini and Requesty send) wrapped as WAV."""
+    import struct
+    return (b'RIFF' + struct.pack('<I', 36 + len(pcm)) + b'WAVEfmt ' +
+            struct.pack('<IHHIIHH', 16, 1, 1, rate, rate * 2, 2, 16) + b'data' + struct.pack('<I', len(pcm)) + pcm)
+
+
+def _parse_speech_sse(raw: bytes, endpoint: str) -> tuple[bytes, dict | None]:
+    chunks, usage = [], None
+    for line in raw.decode('utf-8', 'replace').splitlines():
+        if not line.startswith('data:'):
+            continue
+        data = line[5:].strip()
+        if not data or data == '[DONE]':
+            continue
+        try:
+            ev = json.loads(data)
+        except ValueError:
+            continue
+        if ev.get('type') == 'speech.audio.delta' and ev.get('audio'):
+            chunks.append(base64.b64decode(ev['audio']))
+        elif ev.get('type') == 'speech.audio.done':
+            usage = ev.get('usage')
+        elif ev.get('error'):
+            raise ProviderError(f'Provider error in the stream: {json.dumps(ev["error"])[:600]}', 'reply', None, endpoint)
+    if not chunks:
+        raise ProviderError(f'No audio in the stream: {raw[:300]!r}', 'empty', None, endpoint)
+    return b''.join(chunks), usage
+
+
+def speech_models(provider: str, key: str) -> list[dict]:
+    if provider == 'openrouter':
+        def build():
+            data = _json(f'{OPENROUTER}/models?output_modalities=speech', key, timeout=60).get('data', [])
+            return [{'id': m['id'], 'pricing': {k: v for k, v in (m.get('pricing') or {}).items() if v not in (None, '0', 0)}}
+                    for m in data]
+        return _cached('or-speech-models', 3600, build)
+    if provider == 'llmgateway':
+        def build():
+            data = _json(f'{LLMGATEWAY}/models', key, timeout=60)
+            rows = []
+            for m in data.get('data', data) if isinstance(data, dict) else data:
+                arch = m.get('architecture') or {}
+                voices = sorted({v for p in m.get('providers') or [] for v in (p.get('supported_voices') or [])})
+                if not ({'audio', 'speech'} & set(arch.get('output_modalities', [])) or voices):
+                    continue
+                rows.append({'id': m['id'], 'voices': voices or None,
+                             'pricing': {k: v for k, v in (m.get('pricing') or {}).items() if v not in (None, '0', 0)}})
+            return rows
+        return _cached('llmg-speech-models', 3600, build)
+    data = _json(f'{REQUESTY}/models/all', key, timeout=60)
+    return [{'id': m.get('id', ''), 'pricing': m.get('pricing', {})}
+            for m in (data.get('data', data) if isinstance(data, dict) else data) if m.get('api') == 'speech']
+
+
+def speech_generate(provider: str, key: str, *, model: str, text: str, voice=None, response_format=None,
+                    speed=None, instructions=None) -> dict:
+    """POST /audio/speech. Returns {'audio', 'ext', 'cost', 'usage', 'notes', 'endpoint'}.
+
+    OpenRouter answers with raw bytes (mp3 or pcm only; mp3 is asked for). LLM Gateway is asked for
+    SSE, the only way it reports a cost. Requesty's gpt-4o-mini-tts needs SSE (and the tts-1 models
+    refuse it); its stream carries tokens, not cost."""
+    endpoint = f'{SPEECH_BASES[provider]()}/audio/speech'
+    notes = []
+    fmt = response_format
+    if provider == 'openrouter':
+        if fmt not in (None, 'mp3'):
+            notes.append(f'OpenRouter speech returns mp3 or raw pcm only; mp3 asked for instead of {fmt}')
+        fmt = 'mp3'
+    payload = {'model': model, 'input': text}
+    for name, value in (('voice', voice), ('response_format', fmt), ('speed', speed), ('instructions', instructions)):
+        if value is not None:
+            payload[name] = value
+    sse = provider == 'llmgateway' or (provider == 'requesty' and 'gpt-4o-mini-tts' in model)
+    if sse:
+        payload['stream_format'] = 'sse'
+    raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
+    usage = None
+    if raw.lstrip()[:5] in (b'data:', b'event') or raw.lstrip()[:1] == b':':
+        audio, usage = _parse_speech_sse(raw, endpoint)
+    else:
+        audio = raw
+    if not audio:
+        raise ProviderError('Empty audio reply', 'empty', None, endpoint)
+    ext = sniff_audio(audio)
+    if ext is None:
+        if audio.lstrip()[:1] == b'{':
+            raise ProviderError(f'Provider sent JSON, not audio: {audio[:600]!r}', 'reply', None, endpoint)
+        audio, ext = pcm_to_wav(audio), 'wav'
+        notes.append('The provider sent raw PCM; wrapped as WAV assuming 24 kHz 16-bit mono')
+    cost = None
+    if usage and usage.get('cost') is not None:
+        try:
+            cost = float(usage['cost'])
+        except (TypeError, ValueError):
+            pass
+    return {'audio': audio, 'ext': ext, 'cost': cost, 'usage': usage, 'notes': notes, 'endpoint': endpoint}

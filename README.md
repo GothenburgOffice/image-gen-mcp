@@ -1,9 +1,9 @@
 # image-gen-mcp
 
-A remote MCP server (streamable HTTP) for image and short-video generation through
+A remote MCP server (streamable HTTP) for image, short-video and speech (text-to-speech) generation through
 [OpenRouter](https://openrouter.ai), [LLM Gateway](https://llmgateway.io) and
 [Requesty](https://requesty.ai). Any MCP client, such as Claude Code (local, desktop or cloud),
-can generate images through it without knowing the provider APIs.
+can generate images and audio through it without knowing the provider APIs.
 
 Public instance: `https://imagemcp.gothenburgoffice.se/mcp`
 
@@ -14,9 +14,9 @@ each call is billed to that key:
 
 | Header | Provider |
 |---|---|
-| `X-OpenRouter-Key` | OpenRouter: images, video and spending status |
-| `X-LLMGateway-Key` | LLM Gateway: images |
-| `X-Requesty-Key` | Requesty: images |
+| `X-OpenRouter-Key` | OpenRouter: images, video, speech and spending status |
+| `X-LLMGateway-Key` | LLM Gateway: images and speech |
+| `X-Requesty-Key` | Requesty: images and speech |
 | `X-API-Key` | The provider named in the URL: `/mcp` or `/openrouter/mcp` → OpenRouter, `/llmgateway/mcp` → LLM Gateway, `/requesty/mcp` → Requesty. For clients that can only send a standard header name |
 
 Send only the keys you want to use. The server forwards a key to its own provider and does
@@ -30,10 +30,11 @@ the server reports HTTP 402 as "limit reached".
 | Tool | What it does |
 |---|---|
 | `generate_image` | prompt → WebP, with an inline preview and an HTTPS URL to the full file. Options: provider, model, aspect ratio, size, resolution, quality, reference images, `width` (scale) or `fit WxH` (crop, with the uncropped original returned too), n |
-| `list_models` | Image models (or `kind=video`) for a provider with prices, plus the costs this server has seen in real runs |
+| `list_models` | Image models (or `kind=video`, `kind=speech`) for a provider with prices, plus the costs this server has seen in real runs |
 | `key_status` | Which keys the connection sends; for OpenRouter, the limit, what is left and today's use |
 | `recent_rejections` | Recent refused or failed requests (no prompts kept), useful before retrying a refused prompt |
 | `generate_video` / `video_status` | OpenRouter video jobs: submit, wait, return an MP4 URL; resume a job without paying again |
+| `generate_speech` | Text to speech on any of the three providers (`/audio/speech`): text → an MP3/WAV URL. Options: provider, model, voice, format, speed, instructions |
 
 The tool descriptions carry the usage rules and known prices: the cheapest suitable model by
 default, a price check before a batch, and stopping at a spending limit. A client needs nothing
@@ -47,6 +48,12 @@ $0.04–0.06).
 can pass `inline: "full"` or `"none"` instead. The full WebP is at
 `https://<host>/files/<random>.webp` and is kept for 7 days. Download it to keep it:
 `curl -fsSL -o out.webp <url>`.
+
+**Speech.** `generate_speech` defaults to `mistralai/voxtral-mini-tts-2603` on OpenRouter (MP3
+only), `gemini-2.5-flash-preview-tts` on LLM Gateway (WAV; ElevenLabs models too) and
+`openai/gpt-4o-mini-tts` on Requesty (OpenAI voices only). Only LLM Gateway reports the cost of a
+speech call; for the others, `list_models kind=speech` shows the prices. Override the defaults with
+`DEFAULT_<PROVIDER>_SPEECH_MODEL`.
 
 **Reference images.** The server cannot read your local files. Give each reference as an https
 URL, a `/files/` URL from an earlier result, a data URL or base64. To use a local file, upload it
