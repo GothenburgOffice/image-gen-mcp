@@ -50,6 +50,16 @@ class Stub(BaseHTTPRequestHandler):
             self.reply({'data': [{'id': 'test/cheap', 'endpoints': '/api/v1/images/models/test/cheap/endpoints',
                                   'supported_parameters': {'aspect_ratio': {'type': 'enum', 'values': ['1:1', '2:3']},
                                                            'input_references': {'type': 'range', 'min': 0, 'max': 2}}}]})
+        elif self.path == '/or/models?output_modalities=speech':
+            self.reply({'data': [
+                {'id': 'google/tts-lite', 'pricing': {'prompt': '0.0000005', 'completion': '0.000006'},
+                 'supported_voices': ['Aoede', 'Kore']},
+                {'id': 'cheap/chars', 'pricing': {'prompt': '0.0000006', 'completion': '0'},
+                 'supported_voices': ['af_bella']},
+                {'id': 'google/tts-pro', 'pricing': {'prompt': '0.000001', 'completion': '0.00002'},
+                 'supported_voices': ['Aoede']},
+                {'id': 'odd/unit', 'pricing': {'prompt': '0', 'completion': '0.0025'}, 'supported_voices': []},
+                {'id': 'odd/cheap-unit', 'pricing': {'prompt': '0', 'completion': '0.00001'}, 'supported_voices': []}]})
         elif self.path == '/or/key':
             if self.headers.get('Authorization') != 'Bearer or-good':
                 return self.reply({'error': 'bad key'}, 401)
@@ -68,6 +78,10 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == '/lg/images/generations':
             return self.reply({'data': []})
         if self.path == '/or/audio/speech':
+            if payload.get('model', '').startswith('google/'):
+                if payload.get('response_format') != 'pcm':
+                    return self.reply({'error': {'message': 'Gemini TTS only supports response_format="pcm". Got "mp3".'}}, 400)
+                return self.raw(b'\xff\xf3' + b'\x00' * 98, 'audio/pcm')  # pcm that happens to look like mp3
             return self.raw(b'ID3\x04\x00fake-mp3', 'audio/mpeg')
         if self.path == '/lg/audio/speech':
             if payload.get('voice') == 'no-sse':
@@ -278,3 +292,45 @@ def test_speech_llmgateway_falls_back_to_binary_when_sse_is_refused():
 def test_speech_requesty_length_limit():
     res = run('generate_speech', {'text': 'a' * 4097, 'provider': 'requesty'}, {'X-Requesty-Key': 'k'})
     assert res.is_error and '4096' in res.content[0].text
+
+
+def test_speech_models_ranked_with_voice_filter():
+    res = run('list_models', {'kind': 'speech', 'voice': 'aoede'}, {'X-OpenRouter-Key': 'or-good'})
+    assert not res.is_error, res.content[0].text
+    rows = json.loads(res.content[0].text)['models']
+    assert [r['id'] for r in rows] == ['google/tts-lite', 'google/tts-pro']
+    assert rows[0]['est_usd_per_1000_chars'] < rows[1]['est_usd_per_1000_chars']
+    assert 'Aoede' in rows[0]['voices'] and '/ $6.00 per million' in rows[0]['price']
+    res = run('list_models', {'kind': 'speech'}, {'X-OpenRouter-Key': 'or-good'})
+    rows = json.loads(res.content[0].text)['models']
+    assert rows[0]['id'] == 'cheap/chars' and {r['id'] for r in rows[-2:]} == {'odd/unit', 'odd/cheap-unit'}
+    assert rows[-1]['est_usd_per_1000_chars'] is None and rows[-2]['est_usd_per_1000_chars'] is None
+
+
+def test_speech_openrouter_gemini_falls_back_to_pcm_as_wav():
+    res = run('generate_speech', {'text': 'hej', 'model': 'google/gemini-tts', 'voice': 'Aoede'},
+              {'X-OpenRouter-Key': 'or-good'})
+    assert not res.is_error, res.content[0].text
+    out = json.loads(res.content[0].text)
+    assert SEEN['payload']['response_format'] == 'pcm' and out['format'] == 'wav'
+    with urllib.request.urlopen(out['url']) as resp:
+        assert resp.headers['Content-Type'] == 'audio/wav' and resp.read()[:4] == b'RIFF'
+
+
+def test_llmgateway_speech_list_keeps_voiceless_models_and_drops_realtime():
+    from image_gen_mcp import providers
+    catalog = {'data': [
+        {'id': 'tts-novoice', 'architecture': {'output_modalities': ['audio']}, 'providers': [{}],
+         'pricing': {'input_character': '15e-6'}},
+        {'id': 'realtime', 'architecture': {'output_modalities': ['text', 'audio']},
+         'providers': [{'supported_voices': ['alloy']}], 'pricing': {'prompt': '1e-6'}},
+        {'id': 'chat', 'architecture': {'output_modalities': ['text']}, 'providers': [{}], 'pricing': {}}]}
+    real = providers._json
+    providers._json = lambda *a, **k: catalog
+    providers._cache.pop('llmg-speech-models', None)
+    try:
+        rows = providers.speech_models('llmgateway', 'k')
+    finally:
+        providers._json = real
+        providers._cache.pop('llmg-speech-models', None)
+    assert [r['id'] for r in rows] == ['tts-novoice'] and rows[0]['voices'] == []

@@ -406,36 +406,88 @@ def _parse_speech_sse(raw: bytes, endpoint: str) -> tuple[bytes, dict | None]:
     return b''.join(chunks), usage
 
 
+OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse']
+# Rough size of 1000 characters of speech: ~250 input tokens and ~65 s of audio at ~25 audio tokens/s.
+_IN_TOKENS, _OUT_TOKENS = 250, 1600
+
+
+def _f(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _speech_row(mid: str, voices, *, per_char=0.0, per_in_token=0.0, per_out_token=0.0) -> dict:
+    """One speech model with an estimated price for 1000 characters, so models can be ranked."""
+    if per_char:
+        est = per_char * 1000
+        text = f'${per_char * 1e6:.2f} per million characters'
+    elif per_out_token and not per_in_token:  # an output price alone says nothing of its unit
+        est = None
+        text = f'${per_out_token:g} per output unit (unit not stated; run once and read the cost)'
+    elif per_in_token or per_out_token:
+        est = per_in_token * _IN_TOKENS + per_out_token * _OUT_TOKENS
+        text = f'${per_in_token * 1e6:.2f} / ${per_out_token * 1e6:.2f} per million input / output-audio tokens'
+    else:
+        est, text = 0.0, 'free (or no price listed)'
+    return {'id': mid, 'est_usd_per_1000_chars': round(est, 5) if est is not None else None, 'price': text, 'voices': sorted(voices or [])}
+
+
+def _by_price(r):
+    return r['est_usd_per_1000_chars'] if r['est_usd_per_1000_chars'] is not None else 9e9
+
+
 def speech_models(provider: str, key: str) -> list[dict]:
+    """Text-to-speech models with their voices, cheapest first (estimated per 1000 characters)."""
     if provider == 'openrouter':
         def build():
-            data = _json(f'{OPENROUTER}/models?output_modalities=speech', key, timeout=60).get('data', [])
-            return [{'id': m['id'], 'pricing': {k: v for k, v in (m.get('pricing') or {}).items() if v not in (None, '0', 0)}}
-                    for m in data]
+            rows = []
+            for m in _json(f'{OPENROUTER}/models?output_modalities=speech', key, timeout=60).get('data', []):
+                pr = m.get('pricing') or {}
+                prompt, completion = _f(pr.get('prompt')), _f(pr.get('completion'))
+                # Token-priced models (Gemini) bill audio output; the rest bill the input text only.
+                if completion:
+                    row = _speech_row(m['id'], m.get('supported_voices'), per_in_token=prompt, per_out_token=completion)
+                else:
+                    row = _speech_row(m['id'], m.get('supported_voices'), per_char=prompt)
+                rows.append(row)
+            return sorted(rows, key=_by_price)
         return _cached('or-speech-models', 3600, build)
     if provider == 'llmgateway':
         def build():
             data = _json(f'{LLMGATEWAY}/models', key, timeout=60)
             rows = []
             for m in data.get('data', data) if isinstance(data, dict) else data:
-                arch = m.get('architecture') or {}
-                voices = sorted({v for p in m.get('providers') or [] for v in (p.get('supported_voices') or [])})
-                if not ({'audio', 'speech'} & set(arch.get('output_modalities', [])) or voices):
+                outs = set((m.get('architecture') or {}).get('output_modalities', []))
+                voices = {v for p in m.get('providers') or [] for v in (p.get('supported_voices') or [])}
+                # Plain text-to-speech only: realtime/live models also output text and are not /audio/speech
+                # models. A speech model may list no voices; it is kept, with an empty list.
+                if not ({'audio', 'speech'} & outs or voices) or 'text' in outs:
                     continue
-                rows.append({'id': m['id'], 'voices': voices or None,
-                             'pricing': {k: v for k, v in (m.get('pricing') or {}).items() if v not in (None, '0', 0)}})
-            return rows
+                pr = m.get('pricing') or {}
+                rows.append(_speech_row(m['id'], voices, per_char=_f(pr.get('input_character')),
+                                        per_in_token=_f(pr.get('prompt')),
+                                        per_out_token=_f(pr.get('output_audio') or pr.get('completion'))))
+            return sorted(rows, key=_by_price)
         return _cached('llmg-speech-models', 3600, build)
     data = _json(f'{REQUESTY}/models/all', key, timeout=60)
-    return [{'id': m.get('id', ''), 'pricing': m.get('pricing', {})}
-            for m in (data.get('data', data) if isinstance(data, dict) else data) if m.get('api') == 'speech']
+    rows = []
+    for m in (data.get('data', data) if isinstance(data, dict) else data):
+        if m.get('api') != 'speech':
+            continue
+        pr = m.get('pricing') or {}
+        rows.append(_speech_row(m.get('id', ''), OPENAI_VOICES, per_char=_f(pr.get('input_character')),
+                                per_in_token=_f(pr.get('input_token')), per_out_token=_f(pr.get('output_token'))))
+    return sorted(rows, key=_by_price)
 
 
 def speech_generate(provider: str, key: str, *, model: str, text: str, voice=None, response_format=None,
                     speed=None, instructions=None) -> dict:
     """POST /audio/speech. Returns {'audio', 'ext', 'cost', 'usage', 'notes', 'endpoint'}.
 
-    OpenRouter answers with raw bytes (mp3 or pcm only; mp3 is asked for). LLM Gateway is asked for
+    OpenRouter answers with raw bytes (mp3 or pcm only; mp3 is asked for, pcm when the model refuses
+    mp3, as Gemini TTS does). LLM Gateway is asked for
     SSE, the only way it reports a cost. Requesty's gpt-4o-mini-tts needs SSE (and the tts-1 models
     refuse it); its stream carries tokens, not cost."""
     endpoint = f'{SPEECH_BASES[provider]()}/audio/speech'
@@ -455,12 +507,21 @@ def speech_generate(provider: str, key: str, *, model: str, text: str, voice=Non
     try:
         raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
     except ProviderError as e:
-        # LLM Gateway documents SSE, but if a model refuses it (400, not billed), ask once more for
-        # plain binary audio: the audio matters more than seeing the cost.
-        if not (provider == 'llmgateway' and e.status == 400):
+        # A refusal (HTTP 400) is not billed, so one corrected retry costs nothing extra.
+        if e.status != 400:
             raise
-        del payload['stream_format']
-        notes.append('LLM Gateway refused stream_format=sse for this model; plain audio asked for, so no cost')
+        if provider == 'llmgateway':
+            # LLM Gateway documents SSE, but if a model refuses it, ask for plain binary audio:
+            # the audio matters more than seeing the cost.
+            del payload['stream_format']
+            notes.append('LLM Gateway refused stream_format=sse for this model; plain audio asked for, so no cost')
+        elif provider == 'openrouter' and 'pcm' in str(e):
+            # Some OpenRouter models (Gemini TTS, seen 2026-11-14) only return pcm: ask for it and
+            # wrap it as WAV below.
+            payload['response_format'] = 'pcm'
+            notes.append(f'{model} refused mp3 on OpenRouter (pcm only); pcm asked for')
+        else:
+            raise
         raw = _request(endpoint, key, json.dumps(payload).encode(), 'application/json')
     usage = None
     if raw.lstrip()[:5] in (b'data:', b'event') or raw.lstrip()[:1] == b':':
@@ -469,7 +530,8 @@ def speech_generate(provider: str, key: str, *, model: str, text: str, voice=Non
         audio = raw
     if not audio:
         raise ProviderError('Empty audio reply', 'empty', None, endpoint)
-    ext = sniff_audio(audio)
+    # Raw PCM can start with bytes that look like an mp3 frame, so don't sniff what was asked for as pcm.
+    ext = None if payload.get('response_format') == 'pcm' else sniff_audio(audio)
     if ext is None:
         if audio.lstrip()[:1] == b'{':
             raise ProviderError(f'Provider sent JSON, not audio: {audio[:600]!r}', 'reply', None, endpoint)

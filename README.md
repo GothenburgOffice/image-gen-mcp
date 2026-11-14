@@ -40,7 +40,7 @@ header names, so connectors use `X-API-Key`.
 | Tool | What it does |
 |---|---|
 | `generate_image` | prompt → WebP, with an inline preview and an HTTPS URL to the full file. Options: provider, model, aspect ratio, size, resolution, quality, reference images, `width` (scale) or `fit WxH` (crop, with the uncropped original returned too), n |
-| `list_models` | Image models (or `kind=video`, `kind=speech`) for a provider with prices, plus the costs this server has seen in real runs |
+| `list_models` | Image models (or `kind=video`, or `kind=speech` with voices and a `voice` filter) for a provider with prices, plus the costs this server has seen in real runs |
 | `key_status` | Which keys the connection sends; for OpenRouter, the limit, what is left and today's use |
 | `recent_rejections` | Recent refused or failed requests (no prompts kept), useful before retrying a refused prompt |
 | `generate_video` / `video_status` | OpenRouter video jobs: submit, wait, return an MP4 URL; resume a job without paying again |
@@ -62,7 +62,9 @@ can pass `inline: "full"` or `"none"` instead. The full WebP is at
 **Speech.** `generate_speech` defaults to `mistralai/voxtral-mini-tts-2603` on OpenRouter (MP3
 only), `gemini-2.5-flash-preview-tts` on LLM Gateway (WAV; ElevenLabs models too) and
 `openai/gpt-4o-mini-tts` on Requesty (OpenAI voices only). Only LLM Gateway reports the cost of a
-speech call; for the others, `list_models kind=speech` shows the prices. Override the defaults with
+speech call; for the others, `list_models kind=speech` shows the prices. That listing is ranked by an
+estimated price per 1,000 characters and shows each model's voices; `voice=Aoede` (for example)
+keeps only the models that offer that voice. Voices belong to models, so ask each provider. Override the defaults with
 `DEFAULT_<PROVIDER>_SPEECH_MODEL`.
 
 **Reference images.** The server cannot read your local files. Give each reference as an https
